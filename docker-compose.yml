@@ -570,7 +570,7 @@ services:
                 ipv4_address: 10.10.0.16
         logging: *default-logging
     hy:
-        image: mercurykd/vpnbot-hysteria:1.0
+        image: vpnbot-eternal/hysteria:2.13.0
         build:
             dockerfile: dockerfile/hysteria.dockerfile
             args:
