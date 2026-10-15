@@ -8228,6 +8228,8 @@ DNS-over-HTTPS with IP:
         $t = preg_replace('~#domain.+#domain~s', "#domain\n$domain reality;\n#domain", $nginx);
         file_put_contents('/config/upstream.conf', $t);
         $this->ssh("nginx -s reload 2>&1", 'up');
+        // eternal: drop the gRPC Reality route if it now collides with the main Reality domain
+        $this->setUpstreamGrpcReality();
     }
 
     public function setUpstreamDomainOcserv($domain)
@@ -9255,7 +9257,8 @@ DNS-over-HTTPS with IP:
                 return;
             }
             $g['service'] = $g['service'] ?? '' ?: 'grpc' . substr($this->getHashBot(), 0, 6);
-            $g['domain']  = $g['domain'] ?? '' ?: 'www.microsoft.com';
+            // www.microsoft.com does not work as a REALITY target with gRPC here (handshake EOF); dl.google.com does
+            $g['domain']  = $g['domain'] ?? '' ?: 'dl.google.com';
             $g['dest']    = $g['dest'] ?? '' ?: "{$g['domain']}:443";
             $g['enabled'] = 1;
         } else {
@@ -9318,7 +9321,12 @@ DNS-over-HTTPS with IP:
         if (!preg_match('~upstream\s+reality_grpc\s*\{~', $nginx)) {
             $nginx = preg_replace('~(\n[ \t]*upstream\s+reality\s*\{)~', "\n    upstream reality_grpc {\n        server xr:8443;\n    }\n" . '$1', $nginx, 1);
         }
-        $line = !empty($g['enabled']) && !empty($g['domain']) ? "{$g['domain']} reality_grpc;" : '';
+        // a second map entry for the same SNI makes nginx refuse the whole config, so step aside
+        // when the main transport is Reality with the same fake domain
+        $p    = $this->getPacConf();
+        $x    = $this->getXray();
+        $main = $p['transport'] == 'Reality' ? strtolower($x['inbounds'][0]['streamSettings']['realitySettings']['serverNames'][0] ?? '') : '';
+        $line = !empty($g['enabled']) && !empty($g['domain']) && strtolower($g['domain']) != $main ? "{$g['domain']} reality_grpc;" : '';
         if (preg_match('~#grpcreality.*?#grpcreality~s', $nginx)) {
             $nginx = preg_replace('~#grpcreality.*?#grpcreality~s', "#grpcreality\n$line\n#grpcreality", $nginx, 1);
         } else {
