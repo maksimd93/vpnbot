@@ -152,6 +152,12 @@ class Bot
             case preg_match('~^/changeTransport(?: (\w+))?$~', $this->input['callback'], $m):
                 $this->changeTransport($m[1] ?? false);
                 break;
+            case preg_match('~^/grpcReality$~', $this->input['callback'], $m):
+                $this->grpcRealityToggle();
+                break;
+            case preg_match('~^/grpcRealityDomain$~', $this->input['callback'], $m):
+                $this->grpcRealityAskDomain();
+                break;
             case preg_match('~^/mirror$~', $this->input['message'], $m):
                 $this->menu('mirror');
                 break;
@@ -742,6 +748,11 @@ class Bot
     public function restartXray($c, $norestart = false)
     {
         $c['inbounds'][0]['settings']['clients'] = array_values($c['inbounds'][0]['settings']['clients']);
+        // eternal: parallel VLESS gRPC Reality inbound, rebuilt from the main client list on every restart
+        $c['inbounds'] = array_values(array_filter($c['inbounds'], fn($v) => ($v['tag'] ?? '') != 'vless_grpc_reality'));
+        if (!empty($this->grpcRealityConf()['enabled'])) {
+            $c['inbounds'][] = $this->grpcRealityInbound($c);
+        }
         $c['log']['access'] = '/logs/xray';
         foreach ($c['inbounds'] as $v) {
             if ($v['tag'] == 'api') {
@@ -5921,6 +5932,8 @@ DNS-over-HTTPS with IP:
                 return "v2rayng://install-config?url=$v2#{$c['inbounds'][0]['settings']['clients'][$i]['id']}";
             case 2:
                 return "sing-box://import-remote-profile/?url={$si}#{$c['inbounds'][0]['settings']['clients'][$i]['email']}";
+            case 3:
+                return $this->grpcRealityLink($i);
 
             default:
                 switch ($pac['transport']) {
@@ -6700,6 +6713,22 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/changeTransport xhttp",
             ],
         ];
+        $grpc   = $this->grpcRealityConf();
+        $data[] = [
+            [
+                'text'          => $this->i18n('gRPC Reality') . ' ' . $this->i18n(!empty($grpc['enabled']) ? 'on' : 'off'),
+                'callback_data' => '/grpcReality',
+            ],
+        ];
+        if (!empty($grpc['enabled'])) {
+            $text[] = "gRPC Reality: <code>{$grpc['domain']}</code>";
+            $data[] = [
+                [
+                    'text'          => 'gRPC Reality SNI: ' . $grpc['domain'],
+                    'callback_data' => '/grpcRealityDomain',
+                ],
+            ];
+        }
 
         $ip_count      = $p['ip_count'] ?: 1;
         $hwidEnabled   = !empty($p['hwid_limit_enabled']);
@@ -7122,6 +7151,9 @@ DNS-over-HTTPS with IP:
             $text[] = "<a href='$scheme://{$domain}/pac$hash/sub?id={$c['id']}'>subscription</a>";
         }
         $text[] = "<pre><code>{$this->linkXray($i)}</code></pre>\n";
+        if (!empty($this->grpcRealityConf()['enabled'])) {
+            $text[] = "gRPC Reality:\n<pre><code>{$this->linkXray($i, 3)}</code></pre>\n";
+        }
 
         $text[] = "<a href='$scheme://{$domain}/pac$hash?t=s&r=v&s={$c['id']}#{$c['email']}'>import://v2rayng</a>";
         $text[] = "<a href='$scheme://{$domain}/pac$hash?t=si&r=si&s={$c['id']}#{$c['email']}'>import://sing-box</a>";
@@ -7229,6 +7261,14 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/qrXray {$i}_2",
             ],
         ];
+        if (!empty($this->grpcRealityConf()['enabled'])) {
+            $data[] = [
+                [
+                    'text'          => $this->i18n('qr gRPC Reality'),
+                    'callback_data' => "/qrXray {$i}_3",
+                ],
+            ];
+        }
         $data[] = [
             [
                 'text'          => $this->i18n('hwid limit') . ': ' . ($hwidEnabled ? $hwidLimit : $this->i18n('off')) . ' (' . count($devices) . ')',
@@ -9125,6 +9165,175 @@ DNS-over-HTTPS with IP:
         } else{
             $this->answer($this->input['callback_id'], 'empty domain', true);
         }
+    }
+
+    // eternal: VLESS gRPC Reality as a second inbound that runs next to the main transport.
+    // Settings live in pac.json -> grpc_reality; the inbound listens on xray:8443 and upstream
+    // nginx sends its SNI there, so both transports share port 443.
+    public function grpcRealityConf(): array
+    {
+        $p = $this->getPacConf();
+        return is_array($p['grpc_reality'] ?? null) ? $p['grpc_reality'] : [];
+    }
+
+    public function grpcRealityInbound(array $c): array
+    {
+        $g       = $this->grpcRealityConf();
+        $clients = [];
+        foreach ($c['inbounds'][0]['settings']['clients'] ?? [] as $v) {
+            if (!empty($v['id']) && !empty($v['email'])) {
+                // disabled users already carry a random id in the main inbound, so they stay disabled here
+                $clients[] = ['id' => $v['id'], 'email' => $v['email']];
+            }
+        }
+        return [
+            'port'     => 8443,
+            'protocol' => 'vless',
+            'settings' => [
+                'clients'    => $clients,
+                'decryption' => 'none',
+            ],
+            'sniffing' => [
+                'destOverride' => ['http', 'tls', 'quic'],
+                'enabled'      => true,
+            ],
+            'streamSettings' => [
+                'network'      => 'grpc',
+                'grpcSettings' => [
+                    'serviceName' => $g['service'],
+                ],
+                'security'        => 'reality',
+                'realitySettings' => [
+                    'dest'        => $g['dest'],
+                    'serverNames' => [$g['domain']],
+                    'privateKey'  => $g['privateKey'],
+                    'shortIds'    => [$g['shortId']],
+                    'show'        => false,
+                    'xver'        => 0,
+                ],
+                'sockopt' => [
+                    'acceptProxyProtocol' => true,
+                ],
+            ],
+            'tag' => 'vless_grpc_reality',
+        ];
+    }
+
+    public function grpcRealityLink($i)
+    {
+        $c = $this->getXray();
+        $g = $this->grpcRealityConf();
+        $u = $c['inbounds'][0]['settings']['clients'][$i];
+        return "vless://{$u['id']}@{$this->getDomain()}:443"
+            . "?encryption=none"
+            . "&security=reality"
+            . "&sni={$g['domain']}"
+            . "&fp=chrome"
+            . "&pbk={$g['publicKey']}"
+            . "&sid={$g['shortId']}"
+            . "&type=grpc"
+            . "&serviceName={$g['service']}"
+            . "&mode=gun"
+            . "#" . rawurlencode("{$u['email']} gRPC Reality");
+    }
+
+    public function grpcRealityToggle()
+    {
+        $p = $this->getPacConf();
+        $g = $this->grpcRealityConf();
+        if (empty($g['enabled'])) {
+            if (empty($g['privateKey']) || empty($g['publicKey'])) {
+                $keys = $this->ssh('xray x25519', 'xr');
+                preg_match('~^Private\s?[Kk]ey:\s*(\S+)~m', $keys, $m);
+                $g['privateKey'] = trim($m[1] ?? '');
+                preg_match('~^(?:Password|Public\s?[Kk]ey):\s*(\S+)~m', $keys, $m);
+                $g['publicKey'] = trim($m[1] ?? '');
+                $g['shortId']   = trim($this->ssh('openssl rand -hex 8', 'xr'));
+            }
+            if (empty($g['privateKey']) || empty($g['publicKey']) || empty($g['shortId'])) {
+                $this->answer($this->input['callback_id'], 'xray x25519 failed', true);
+                return;
+            }
+            $g['service'] = $g['service'] ?? '' ?: 'grpc' . substr($this->getHashBot(), 0, 6);
+            $g['domain']  = $g['domain'] ?? '' ?: 'www.microsoft.com';
+            $g['dest']    = $g['dest'] ?? '' ?: "{$g['domain']}:443";
+            $g['enabled'] = 1;
+        } else {
+            $g['enabled'] = 0;
+        }
+        $p['grpc_reality'] = $g;
+        $this->setPacConf($p);
+        $this->restartXray($this->getXray());
+        $this->setUpstreamGrpcReality();
+        $this->xray();
+    }
+
+    public function grpcRealityAskDomain()
+    {
+        $r = $this->send(
+            $this->input['chat'],
+            "@{$this->input['username']} enter domain",
+            $this->input['message_id'],
+            reply: 'enter domain',
+        );
+        $_SESSION['reply'][$r['result']['message_id']] = [
+            'start_message'  => $this->input['message_id'],
+            'start_callback' => $this->input['callback_id'],
+            'callback'       => 'grpcRealitySetDomain',
+            'args'           => [],
+        ];
+    }
+
+    public function grpcRealitySetDomain($domain)
+    {
+        $domain = strtolower(trim($domain));
+        $p      = $this->getPacConf();
+        $x      = $this->getXray();
+        $own    = $p['domain'] ?? '';
+        $main   = $p['transport'] == 'Reality' ? ($x['inbounds'][0]['streamSettings']['realitySettings']['serverNames'][0] ?? '') : '';
+        // the SNI must not collide with names that upstream nginx already routes elsewhere
+        if (!preg_match('~^([a-z0-9-]+\.)+[a-z]{2,}$~', $domain) || ($own && ($domain == $own || str_ends_with($domain, ".$own"))) || $domain == $main) {
+            $this->send($this->input['chat'], "wrong domain: $domain");
+            $this->xray();
+            return;
+        }
+        $g           = $this->grpcRealityConf();
+        $g['domain'] = $domain;
+        $g['dest']   = "$domain:443";
+        $p['grpc_reality'] = $g;
+        $this->setPacConf($p);
+        $this->restartXray($x);
+        $this->setUpstreamGrpcReality();
+        $this->xray();
+    }
+
+    public function setUpstreamGrpcReality()
+    {
+        $g = $this->grpcRealityConf();
+        if (empty($g)) {
+            return;
+        }
+        $old   = file_get_contents('/config/upstream.conf');
+        $nginx = $old;
+        if (!preg_match('~upstream\s+reality_grpc\s*\{~', $nginx)) {
+            $nginx = preg_replace('~(\n[ \t]*upstream\s+reality\s*\{)~', "\n    upstream reality_grpc {\n        server xr:8443;\n    }\n" . '$1', $nginx, 1);
+        }
+        $line = !empty($g['enabled']) && !empty($g['domain']) ? "{$g['domain']} reality_grpc;" : '';
+        if (preg_match('~#grpcreality.*?#grpcreality~s', $nginx)) {
+            $nginx = preg_replace('~#grpcreality.*?#grpcreality~s', "#grpcreality\n$line\n#grpcreality", $nginx, 1);
+        } else {
+            $nginx = preg_replace('~(\n[ \t]*default\s+other;)~', "\n        #grpcreality\n$line\n        #grpcreality" . '$1', $nginx, 1);
+        }
+        if ($nginx == $old) {
+            return;
+        }
+        file_put_contents('/config/upstream.conf', $nginx);
+        if (strpos($this->ssh('nginx -t 2>&1', 'up'), 'successful') === false) {
+            // never leave upstream with a config it cannot load: roll back and keep the old routing
+            file_put_contents('/config/upstream.conf', $old);
+            return;
+        }
+        $this->ssh('nginx -s reload 2>&1', 'up');
     }
 
     public function changeTransport($transport)
