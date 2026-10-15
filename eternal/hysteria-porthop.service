@@ -1,0 +1,13 @@
+[Unit]
+Description=vpnbot: Hysteria port hopping (UDP range -> hysteria container)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@REPO@/eternal/porthop.sh add
+ExecStop=@REPO@/eternal/porthop.sh del
+
+[Install]
+WantedBy=multi-user.target
