@@ -2444,6 +2444,9 @@ class Bot
             file_put_contents('/certs/cert_public', preg_replace('~[^\s]+BEGIN PRIVATE KEY.+?END PRIVATE KEY[^\s]+~s', '', $bundle));
             $this->adguardSync();
             $this->cloakNginx();
+            // eternal: Caddy (naive) and ocserv keep the old certificate in memory until restarted
+            $this->restartNaive();
+            $this->restartOcserv(file_get_contents('/config/ocserv.conf'));
         } else {
             $this->update($this->input['chat'], $this->input['message_id'], "wrong format key");
         }
