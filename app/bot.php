@@ -527,6 +527,9 @@ class Bot
             case preg_match('~^/resetAmnezia (-?\d+)$~', $this->input['callback'], $m):
                 $this->resetAmnezia($m[1]);
                 break;
+            case preg_match('~^/switchAwg3 (-?\d+)$~', $this->input['callback'], $m):
+                $this->switchAwg3($m[1]);
+                break;
             case preg_match('~^/switchExchange (\d+)$~', $this->input['callback'], $m):
                 $this->switchExchange($m[1]);
                 break;
@@ -1913,6 +1916,13 @@ class Bot
                 if ($this->getPacConf()['wg1_amnezia'] != $json['pac']['wg1_amnezia']) {
                     $switch_wg1amnezia = 1;
                 }
+                // eternal: syncconf does not drop AWG 3 keys from a running interface, so restart it instead
+                if ($this->getPacConf()['awg3'] != $json['pac']['awg3']) {
+                    $switch_amnezia = 1;
+                }
+                if ($this->getPacConf()['wg1_awg3'] != $json['pac']['wg1_awg3']) {
+                    $switch_wg1amnezia = 1;
+                }
                 $this->setPacConf($json['pac']);
                 $out[] = 'update naiveproxy';
                 $this->update($this->input['chat'], $this->input['message_id'], implode("\n", $out));
@@ -2117,6 +2127,9 @@ class Bot
             unset($clients[$k]['interface']['H3']);
             unset($clients[$k]['interface']['H4']);
             unset($clients[$k]['interface']['I1']);
+            foreach ($this->awg3KeyNames() as $awg3key) {
+                unset($clients[$k]['interface'][$awg3key]);
+            }
             if (!empty($amnezia)) {
                 $clients[$k]['peers'][0]['PresharedKey'] = $pk;
                 foreach ($ak as $j => $i) {
@@ -2139,6 +2152,9 @@ class Bot
         unset($wg['interface']['H3']);
         unset($wg['interface']['H4']);
         unset($wg['interface']['I1']);
+        foreach ($this->awg3KeyNames() as $awg3key) {
+            unset($wg['interface'][$awg3key]);
+        }
         if (!empty($amnezia)) {
             foreach ($ak as $j => $i) {
                 $wg['interface'][$j] = $i;
@@ -2154,6 +2170,41 @@ class Bot
         }
         $this->restartWG($this->createConfig($wg), 1);
         $this->menu('wg', $page);
+    }
+
+    // eternal: AmneziaWG 3.1 keys (amneziawg-go and amneziawg-tools v3.1+)
+    public function awg3KeyNames()
+    {
+        return [
+            'HeaderProtectionKey',
+            'ContentPaddingAddition',
+            'RekeyAfterTime',
+            'RekeyTimeout',
+            'RejectAfterTime',
+            'KeepaliveTimeout',
+            'MaxHandshakeAttempts',
+            'RandomTrailers',
+            'DisableCookies',
+        ];
+    }
+
+    public function awg3Enabled()
+    {
+        $c = $this->getPacConf();
+        return !empty($c[$this->getInstanceWG(1) . 'amnezia']) && !empty($c[$this->getInstanceWG(1) . 'awg3']);
+    }
+
+    // eternal: AWG 3 needs new obfuscation keys on the server and on every client of the instance,
+    // so the switch takes the same path as "reset obf-keys" (and turns amnezia on)
+    public function switchAwg3($page = 0)
+    {
+        $on = $this->awg3Enabled();
+        $c  = $this->getPacConf();
+        $c[$this->getInstanceWG(1) . 'awg3'] = $on ? 0 : 1;
+        // the reset path of switchAmnezia() regenerates the keys but does not set the amnezia flag itself
+        $c[$this->getInstanceWG(1) . 'amnezia'] = 1;
+        $this->setPacConf($c);
+        $this->switchAmnezia($page, 1);
     }
 
     public function switchTorrent($page = 0, $restart = false)
@@ -3420,6 +3471,13 @@ DNS-over-HTTPS with IP:
                 ],
             ]);
         }
+        // eternal: AmneziaWG 3.1 on this instance; switching it gives every client of the instance a new config
+        array_unshift($data, [
+            [
+                'text'          => $this->i18n($this->awg3Enabled() ? 'on' : 'off') . " AWG 3.1",
+                'callback_data' => "/switchAwg3 $page",
+            ],
+        ]);
         array_unshift($data, [
             [
                 'text'          => $this->i18n($am ? 'on' : 'off') . " amnezia",
@@ -3844,7 +3902,7 @@ DNS-over-HTTPS with IP:
                     "awg" => [
                         "isThirdPartyConfig" => true,
                         "last_config" => json_encode(array_merge(array_map('strval', $this->amneziaKeys()), [
-                            "protocol_version" => "2",
+                            "protocol_version" => $this->awg3Enabled() ? "3.1" : "2",
                             "client_ip"        => $client['interface']['Address'],
                             "client_priv_key"  => $client['interface']['PrivateKey'],
                             "client_pub_key"   => "0",
@@ -3858,7 +3916,7 @@ DNS-over-HTTPS with IP:
                         ])),
                         "port" => $wgPort,
                         "transport_proto" => "udp",
-                        "protocol_version" => "2"
+                        "protocol_version" => $this->awg3Enabled() ? "3.1" : "2"
                     ],
                     "container" => "amnezia-awg2"
                 ]
@@ -9662,6 +9720,26 @@ DNS-over-HTTPS with IP:
                 'H4'   => $h[3],
                 'I1'   => '<b 0xc000000001><r 100>',
             ];
+            if (!empty($c[$this->getInstanceWG(1) . 'awg3'])) {
+                // eternal: AmneziaWG 3.1. Header protection needs S1-S4 >= 12 and the same key on both sides;
+                // the other values are the defaults of AmneziaVPN 3.1 servers
+                $keys = &$c[$this->getInstanceWG(1) . 'amnezia_keys'];
+                foreach (['S1' => 64, 'S2' => 64, 'S3' => 64, 'S4' => 32] as $s => $max) {
+                    if ($keys[$s] < 12) {
+                        $keys[$s] = random_int(12, $max);
+                    }
+                }
+                $keys['HeaderProtectionKey']    = base64_encode(random_bytes(32));
+                $keys['ContentPaddingAddition'] = '10-100';
+                $keys['RekeyAfterTime']         = '100-120';
+                $keys['RekeyTimeout']           = '3-7';
+                $keys['RejectAfterTime']        = '150-180';
+                $keys['KeepaliveTimeout']       = '5-15';
+                $keys['MaxHandshakeAttempts']   = '15-20';
+                $keys['RandomTrailers']         = 'on';
+                $keys['DisableCookies']         = 'on';
+                unset($keys);
+            }
             $this->setPacConf($c);
         }
         return $c[$this->getInstanceWG(1) . 'amnezia_keys'];
@@ -9779,6 +9857,8 @@ DNS-over-HTTPS with IP:
         $this->ssh("echo '$conf_str' > /etc/wireguard/wg0.conf", $this->getInstanceWG());
         if (!empty($switch)) {
             $this->ssh("{$this->getWGType(1)}-quick down wg0", $this->getInstanceWG());
+            // eternal: also when the type stays the same (reset obf-keys, AWG 3): wg-quick does not see an AmneziaWG interface
+            $this->ssh("{$this->getWGType()}-quick down wg0", $this->getInstanceWG());
             $this->ssh("{$this->getWGType()}-quick up wg0", $this->getInstanceWG());
         } else {
             $this->ssh("{$this->getWGType()} syncconf wg0 <({$this->getWGType()}-quick strip wg0)", $this->getInstanceWG());
