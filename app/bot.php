@@ -527,8 +527,16 @@ class Bot
             case preg_match('~^/resetAmnezia (-?\d+)$~', $this->input['callback'], $m):
                 $this->resetAmnezia($m[1]);
                 break;
-            case preg_match('~^/switchAwg3 (-?\d+)$~', $this->input['callback'], $m):
-                $this->switchAwg3($m[1]);
+            case preg_match('~^/switchAwg3 (-?\d+) ([01])( ok)?$~', $this->input['callback'], $m):
+                // eternal: the instance travels in the callback, so an old menu message cannot switch the other one
+                $c = $this->getPacConf();
+                $c['wg_instance'] = (int) $m[2];
+                $this->setPacConf($c);
+                if (empty($m[3])) {
+                    $this->confirmAwg3($m[1]);
+                } else {
+                    $this->switchAwg3($m[1]);
+                }
                 break;
             case preg_match('~^/switchExchange (\d+)$~', $this->input['callback'], $m):
                 $this->switchExchange($m[1]);
@@ -2194,6 +2202,31 @@ class Bot
         return !empty($c[$this->getInstanceWG(1) . 'amnezia']) && !empty($c[$this->getInstanceWG(1) . 'awg3']);
     }
 
+    // eternal: switching AWG 3.1 cuts off every client of the instance until it re-imports, so ask first
+    public function confirmAwg3($page = 0)
+    {
+        $n    = $this->getInstanceWG() == 'wg1' ? 1 : 0;
+        $port = getenv($n ? 'WG1PORT' : 'WGPORT');
+        $on   = $this->awg3Enabled();
+        $cnt  = count($this->readClients());
+        $ru   = $this->language == 'ru';
+        $text = $ru
+            ? ($on ? 'Выключить' : 'Включить') . " AWG 3.1 на инстансе $n (порт $port)?\n\nВсе клиенты этого инстанса ($cnt) получат новые ключи и перестанут подключаться, пока их конфиги не импортируют заново. Второй инстанс не изменится."
+            : 'Turn AWG 3.1 ' . ($on ? 'off' : 'on') . " for instance $n (port $port)?\n\nAll clients of this instance ($cnt) get new keys and stop connecting until their configs are imported again. The other instance is not touched.";
+        $this->update($this->input['chat'], $this->input['message_id'], $text, [
+            [
+                [
+                    'text'          => $ru ? 'Да, переключить' : 'Yes, switch',
+                    'callback_data' => "/switchAwg3 $page $n ok",
+                ],
+                [
+                    'text'          => $this->i18n('back'),
+                    'callback_data' => "/menu wg $page",
+                ],
+            ],
+        ]);
+    }
+
     // eternal: AWG 3 needs new obfuscation keys on the server and on every client of the instance,
     // so the switch takes the same path as "reset obf-keys" (and turns amnezia on)
     public function switchAwg3($page = 0)
@@ -3475,7 +3508,7 @@ DNS-over-HTTPS with IP:
         array_unshift($data, [
             [
                 'text'          => $this->i18n($this->awg3Enabled() ? 'on' : 'off') . " AWG 3.1",
-                'callback_data' => "/switchAwg3 $page",
+                'callback_data' => "/switchAwg3 $page " . ($this->getInstanceWG() == 'wg1' ? 1 : 0),
             ],
         ]);
         array_unshift($data, [
