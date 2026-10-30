@@ -497,6 +497,9 @@ class Bot
             case preg_match('~^/userXr (\d+)$~', $this->input['callback'], $m):
                 $this->userXr($m[1]);
                 break;
+            case preg_match('~^/funnelMenu (\d+)$~', $this->input['callback'], $m):
+                $this->funnelMenu($m[1]);
+                break;
             case preg_match('~^/choiceTemplate (.+)$~', $this->input['callback'], $m):
                 $this->choiceTemplate($m[1]);
                 break;
@@ -2345,6 +2348,9 @@ class Bot
     public function qrXray($i, $s = false)
     {
         $link    = $this->linkXray($i, $s);
+        if (!$link) {
+            return;
+        }
         $qr_file = __DIR__ . "/qr/xray.png";
         exec("qrencode -t png -o $qr_file '$link'");
         $r = $this->sendPhoto(
@@ -6025,6 +6031,8 @@ DNS-over-HTTPS with IP:
                 return "sing-box://import-remote-profile/?url={$si}#{$c['inbounds'][0]['settings']['clients'][$i]['email']}";
             case 3:
                 return $this->grpcRealityLink($i);
+            case 4:
+                return $this->funnelLink($i);
 
             default:
                 switch ($pac['transport']) {
@@ -6158,6 +6166,13 @@ DNS-over-HTTPS with IP:
         $text[] = "Menu -> Hysteria";
         $text[] = "server: " . ($port? "<code>$domain:$port</code>" : 'port unavailable');
         $text[] = "passwd: <code>{$pac['hysteria_pass']}</code>";
+        if (!empty($pac['eternal_funnel']['enabled'])) {
+            $text[] = "Если адрес сервера недоступен, резервное подключение доступно в разделе VLESS, в меню пользователя.";
+            $data[] = [[
+                'text' => 'Резервное подключение — VLESS',
+                'callback_data' => '/xray',
+            ]];
+        }
         $data[] = [
             [
                 'text'          => $this->i18n('change password'),
@@ -7359,6 +7374,12 @@ DNS-over-HTTPS with IP:
                     'callback_data' => "/qrXray {$i}_3",
                 ],
             ];
+        }
+        if ($this->funnelLink($i)) {
+            $data[] = [[
+                'text' => 'Резервное подключение',
+                'callback_data' => "/funnelMenu $i",
+            ]];
         }
         $data[] = [
             [
@@ -9258,6 +9279,47 @@ DNS-over-HTTPS with IP:
         } else{
             $this->answer($this->input['callback_id'], 'empty domain', true);
         }
+    }
+
+    // Eternal's alternate HTTPS entry uses the existing XHTTP inbound and its users.
+    public function funnelLink($i)
+    {
+        $pac = $this->getPacConf();
+        $f = $pac['eternal_funnel'] ?? [];
+        $x = $this->getXray();
+        $inbound = $x['inbounds'][0] ?? [];
+        $user = $inbound['settings']['clients'][$i] ?? null;
+        if (empty($f['enabled']) || !$user || ($pac['transport'] ?? '') !== 'xhttp'
+            || ($inbound['streamSettings']['network'] ?? '') !== 'xhttp'
+            || !preg_match('/^[a-z0-9.-]+\.ts\.net$/D', $f['host'] ?? '')
+            || (int) ($f['port'] ?? 0) !== 10000) {
+            return '';
+        }
+        $query = http_build_query([
+            'encryption' => 'none', 'security' => 'tls', 'sni' => $f['host'],
+            'fp' => 'chrome', 'type' => 'xhttp',
+            'path' => $inbound['streamSettings']['xhttpSettings']['path'],
+            'mode' => 'packet-up',
+        ], '', '&', PHP_QUERY_RFC3986);
+        return "vless://{$user['id']}@{$f['host']}:10000?$query#"
+            . rawurlencode($user['email'] . ' — резерв');
+    }
+
+    public function funnelMenu($i)
+    {
+        $link = $this->funnelLink($i);
+        $text = $link
+            ? "Резервное подключение VLESS\n\nСкопируй ссылку и импортируй в LxBox."
+                . "\nTailscale на телефоне не нужен.\n\n<pre><code>"
+                . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . "</code></pre>"
+            : 'Резервное подключение сейчас недоступно.';
+        $data = [];
+        if ($link) {
+            $data[] = [['text' => 'QR резервного подключения', 'callback_data' => "/qrXray {$i}_4"]];
+        }
+        $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
+        $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
     }
 
     // eternal: VLESS gRPC Reality as a second inbound that runs next to the main transport.
