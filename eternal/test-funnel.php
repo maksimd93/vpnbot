@@ -122,4 +122,29 @@ $bot->pacFixture['eternal_warp']['enabled'] = false;
 check($bot->warpProfile(0) === '', 'Disabled WARP profile');
 $bot->warpMenu(0);
 check(strpos($bot->rendered[0], 'TEST-ONLY') === false, 'Stale callback does not reveal a disabled key');
-echo "PASS: fallback links, TLS, QR, menus, WARP chain and per-user key isolation\n";
+$bot->pacFixture['eternal_warp']['enabled'] = true;
+$uuid = $warpFixture['outbounds'][0]['uuid'];
+$sr = ['uuid' => $uuid,
+    'wireguard_conf' => "[Interface]\nPrivateKey = TEST-SR\nI1 = <b 0x0102>\n",
+    'vless_uri' => "vless://$uuid@example.com:443?security=tls&type=xhttp#Eternal-SR",
+];
+$bot->pacFixture['eternal_warp']['shadowrocket'] = $sr;
+$bot->warpMenu(0);
+check($bot->rendered[1][0][0]['callback_data'] === '/shadowrocketMenu 0_1', 'Shadowrocket entry button');
+foreach ([1, 2] as $step) {
+    $bot->input['callback'] = "/shadowrocketMenu 0_$step";
+    $bot->action();
+    check(preg_match('~<pre><code>(.*?)</code></pre>~s', $bot->rendered[0], $m) === 1, 'Copyable import block');
+    check(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8') === $sr[$step === 1 ? 'wireguard_conf' : 'vless_uri'], 'CPS/URI survive Telegram HTML encoding');
+    check($bot->rendered[1][0][0]['callback_data'] === '/shadowrocketMenu 0_' . (3 - $step), 'Navigate both import steps');
+}
+$bot->pacFixture['eternal_warp']['shadowrocket']['uuid'] = 'another-user';
+check($bot->shadowrocketProfile(0) === [], 'Shadowrocket profile ownership');
+$bot->pacFixture['eternal_warp']['shadowrocket'] = $sr;
+$bot->pacFixture['eternal_warp']['shadowrocket']['vless_uri'] = 'vless://another-user@example.com:443';
+check($bot->shadowrocketProfile(0) === [], 'VLESS URI ownership');
+$bot->pacFixture['eternal_warp']['shadowrocket'] = $sr;
+$bot->pacFixture['eternal_warp']['enabled'] = false;
+$bot->shadowrocketMenu(0);
+check(strpos($bot->rendered[0], 'TEST-SR') === false, 'Disabled Shadowrocket credentials stay private');
+echo "PASS: fallback links, TLS, QR, WARP/Shadowrocket imports, CPS escaping and per-user isolation\n";

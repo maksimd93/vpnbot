@@ -503,6 +503,9 @@ class Bot
             case preg_match('~^/warpMenu (\d+)$~', $this->input['callback'], $m):
                 $this->warpMenu($m[1]);
                 break;
+            case preg_match('~^/shadowrocketMenu (\d+)_([12])$~', $this->input['callback'], $m):
+                $this->shadowrocketMenu($m[1], (int) $m[2]);
+                break;
             case preg_match('~^/choiceTemplate (.+)$~', $this->input['callback'], $m):
                 $this->choiceTemplate($m[1]);
                 break;
@@ -9400,9 +9403,60 @@ DNS-over-HTTPS with IP:
                 . htmlspecialchars($profile, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
                 . "</code></pre>"
             : 'Ускоренный профиль для этого пользователя сейчас недоступен.';
-        $this->update($this->input['chat'], $this->input['message_id'], $text, [
-            [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]],
-        ]);
+        $data = [];
+        if ($this->shadowrocketProfile($i)) {
+            $data[] = [['text' => 'Настроить Shadowrocket', 'callback_data' => "/shadowrocketMenu {$i}_1"]];
+        }
+        $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
+        $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
+    }
+
+    public function shadowrocketProfile($i): array
+    {
+        if (!$this->warpProfile($i)) return [];
+        $w = $this->getPacConf()['eternal_warp'];
+        $s = $w['shadowrocket'] ?? [];
+        if (($s['uuid'] ?? '') !== $w['uuid']
+            || !is_string($s['wireguard_conf'] ?? null)
+            || !is_string($s['vless_uri'] ?? null)
+            || strpos($s['wireguard_conf'], '[Interface]') !== 0
+            || strlen($s['wireguard_conf']) > 3400
+            || strlen($s['vless_uri']) > 1000
+            || parse_url($s['vless_uri'], PHP_URL_SCHEME) !== 'vless'
+            || parse_url($s['vless_uri'], PHP_URL_USER) !== $w['uuid']) {
+            return [];
+        }
+        return $s;
+    }
+
+    public function shadowrocketMenu($i, $step = 1)
+    {
+        $s = $this->shadowrocketProfile($i);
+        $data = [];
+        if ($s) {
+            $first = (int) $step !== 2;
+            $text = $first
+                ? "Shadowrocket — шаг 1 из 2: WARP\n\n"
+                    . "Обнови Shadowrocket. Скопируй весь блок ниже, открой Shadowrocket"
+                    . " и импортируй из буфера обмена. Сохрани узел под именем WARP-SR."
+                    . "\nВнутри уже есть ключ и маскировка. Затем перейди к шагу 2."
+                : "Shadowrocket — шаг 2 из 2: Eternal\n\n"
+                    . "Скопируй ссылку ниже и импортируй в Shadowrocket."
+                    . " У узла Eternal-SR нажми ⓘ → Через прокси / Proxy Through → WARP-SR → Сохранить."
+                    . "\nВыбери Eternal-SR и подключись. Порядок: телефон → WARP-SR → Eternal-SR."
+                    . "\nДля проверки: Глобальная маршрутизация → Прокси."
+                    . "\nНа самом Shadowrocket профиль пока не проверен."
+                    . " Ключ WARP отдельный от профиля LxBox.";
+            $text .= "\n\n<pre><code>"
+                . htmlspecialchars($s[$first ? 'wireguard_conf' : 'vless_uri'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . "</code></pre>";
+            $data[] = [['text' => $first ? 'Шаг 2: Eternal' : 'Шаг 1: WARP',
+                'callback_data' => "/shadowrocketMenu {$i}_" . ($first ? 2 : 1)]];
+        } else {
+            $text = 'Профиль Shadowrocket для этого пользователя сейчас недоступен.';
+        }
+        $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/warpMenu $i"]];
+        $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
     }
 
     // eternal: VLESS gRPC Reality as a second inbound that runs next to the main transport.
