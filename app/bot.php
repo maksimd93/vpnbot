@@ -500,6 +500,9 @@ class Bot
             case preg_match('~^/funnelMenu (\d+)$~', $this->input['callback'], $m):
                 $this->funnelMenu($m[1]);
                 break;
+            case preg_match('~^/warpMenu (\d+)$~', $this->input['callback'], $m):
+                $this->warpMenu($m[1]);
+                break;
             case preg_match('~^/choiceTemplate (.+)$~', $this->input['callback'], $m):
                 $this->choiceTemplate($m[1]);
                 break;
@@ -7383,6 +7386,9 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/funnelMenu $i",
             ]];
         }
+        if ($this->warpProfile($i)) {
+            $data[] = [['text' => 'Ускоренный WARP', 'callback_data' => "/warpMenu $i"]];
+        }
         $data[] = [
             [
                 'text'          => $this->i18n('hwid limit') . ': ' . ($hwidEnabled ? $hwidLimit : $this->i18n('off')) . ' (' . count($devices) . ')',
@@ -9350,8 +9356,53 @@ DNS-over-HTTPS with IP:
         if ($legacy) {
             $data[] = [['text' => 'QR прежнего резерва 10000', 'callback_data' => "/qrXray {$i}_5"]];
         }
+        if ($this->warpProfile($i)) {
+            $data[] = [['text' => 'Ускоренный WARP', 'callback_data' => "/warpMenu $i"]];
+        }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
         $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
+    }
+
+    // The enrolled WARP key belongs to one device. Never offer it to another
+    // Xray user or keep advertising it after that user's UUID/transport changes.
+    public function warpProfile($i)
+    {
+        $pac = $this->getPacConf();
+        $w = $pac['eternal_warp'] ?? [];
+        $x = $this->getXray();
+        $inbound = $x['inbounds'][0] ?? [];
+        $user = $inbound['settings']['clients'][$i] ?? null;
+        $profile = $w['profile'] ?? [];
+        $outbound = $profile['outbounds'][0] ?? [];
+        if (empty($w['enabled']) || !$user || empty($w['uuid'])
+            || !hash_equals((string) $w['uuid'], (string) ($user['id'] ?? ''))
+            || ($outbound['uuid'] ?? '') !== $user['id']
+            || ($pac['transport'] ?? '') !== 'xhttp'
+            || ($inbound['streamSettings']['network'] ?? '') !== 'xhttp'
+            || rtrim($outbound['transport']['path'] ?? '', '/')
+                !== rtrim($inbound['streamSettings']['xhttpSettings']['path'] ?? '', '/')) {
+            return '';
+        }
+        $json = json_encode($profile, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return $json !== false && strlen($json) <= 3000 ? $json : '';
+    }
+
+    public function warpMenu($i)
+    {
+        $profile = $this->warpProfile($i);
+        $text = $profile
+            ? "Eternal — ускоренный WARP\n\n"
+                . "Скопируй весь блок ниже → LxBox → + → импорт из буфера обмена."
+                . " Затем выбери узел «Eternal · WARP» и переподключись."
+                . "\nНужна актуальная версия LxBox. Отдельное приложение WARP не требуется."
+                . "\nПрофиль для одного устройства; для второго нужен отдельный ключ."
+                . "\n\n<pre><code>"
+                . htmlspecialchars($profile, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . "</code></pre>"
+            : 'Ускоренный профиль для этого пользователя сейчас недоступен.';
+        $this->update($this->input['chat'], $this->input['message_id'], $text, [
+            [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]],
+        ]);
     }
 
     // eternal: VLESS gRPC Reality as a second inbound that runs next to the main transport.

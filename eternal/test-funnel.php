@@ -88,4 +88,38 @@ check(count($bot->rendered[1]) === 1, 'Stale menu does not offer a QR');
 $bot->pacFixture['eternal_funnel']['enabled'] = true;
 $bot->pacFixture['transport'] = 'Reality';
 check($bot->funnelLink(0) === '', 'Do not offer XHTTP after transport changes');
-echo "PASS: alternate link, identity, TLS, QR dispatch, menu, disabled and stale profiles\n";
+$bot->pacFixture['transport'] = 'xhttp';
+$warpFixture = [
+    'outbounds' => [[
+        'type' => 'vless', 'tag' => 'Eternal · WARP', 'detour' => 'warp',
+        'uuid' => $original['inbounds'][0]['settings']['clients'][0]['id'],
+        'transport' => ['type' => 'xhttp', 'path' => '/vpn/path'],
+    ]],
+    'endpoints' => [['type' => 'wireguard', 'tag' => 'warp', 'private_key' => 'TEST-ONLY']],
+];
+$bot->pacFixture['eternal_warp'] = [
+    'enabled' => true, 'uuid' => $warpFixture['outbounds'][0]['uuid'], 'profile' => $warpFixture,
+];
+check(json_decode($bot->warpProfile(0), true) === $warpFixture, 'Complete detour profile survives serialization');
+$bot->input['callback'] = '/warpMenu 0';
+$bot->action();
+check(strpos($bot->rendered[0], 'Eternal · WARP') !== false, 'WARP callback renders import instructions');
+check(strpos($bot->rendered[0], '&quot;detour&quot;') !== false, 'Profile is escaped as Telegram HTML');
+check(mb_strlen(strip_tags(html_entity_decode($bot->rendered[0]))) < 4096, 'WARP menu fits Telegram');
+$bot->funnelMenu(0);
+check($bot->rendered[1][2][0]['callback_data'] === '/warpMenu 0', 'Fallback menu offers fast profile');
+check($bot->warpProfile(99) === '', 'No profile for a missing user');
+$bot->xrayFixture['inbounds'][0]['settings']['clients'][0]['id'] = '00000000-0000-4000-8000-000000000002';
+check($bot->warpProfile(0) === '', 'No WARP key disclosure to another or disabled user');
+$bot->xrayFixture = $original;
+$bot->pacFixture['eternal_warp']['profile']['outbounds'][0]['uuid'] = 'mismatched-profile';
+check($bot->warpProfile(0) === '', 'Reject a profile prepared for another user');
+$bot->pacFixture['eternal_warp']['profile'] = $warpFixture;
+$bot->xrayFixture['inbounds'][0]['streamSettings']['xhttpSettings']['path'] = '/changed';
+check($bot->warpProfile(0) === '', 'Hide a stale transport profile');
+$bot->xrayFixture = $original;
+$bot->pacFixture['eternal_warp']['enabled'] = false;
+check($bot->warpProfile(0) === '', 'Disabled WARP profile');
+$bot->warpMenu(0);
+check(strpos($bot->rendered[0], 'TEST-ONLY') === false, 'Stale callback does not reveal a disabled key');
+echo "PASS: fallback links, TLS, QR, menus, WARP chain and per-user key isolation\n";
