@@ -6033,6 +6033,8 @@ DNS-over-HTTPS with IP:
                 return $this->grpcRealityLink($i);
             case 4:
                 return $this->funnelLink($i);
+            case 5:
+                return $this->funnelLink($i, true);
 
             default:
                 switch ($pac['transport']) {
@@ -9282,7 +9284,7 @@ DNS-over-HTTPS with IP:
     }
 
     // Eternal's alternate HTTPS entry uses the existing XHTTP inbound and its users.
-    public function funnelLink($i)
+    public function funnelLink($i, $legacy = false)
     {
         $pac = $this->getPacConf();
         $f = $pac['eternal_funnel'] ?? [];
@@ -9292,24 +9294,41 @@ DNS-over-HTTPS with IP:
         if (empty($f['enabled']) || !$user || ($pac['transport'] ?? '') !== 'xhttp'
             || ($inbound['streamSettings']['network'] ?? '') !== 'xhttp'
             || !preg_match('/^[a-z0-9.-]+\.ts\.net$/D', $f['host'] ?? '')
-            || (int) ($f['port'] ?? 0) !== 10000) {
+            || !in_array((int) ($f['port'] ?? 0), [443, 10000], true)
+            || ($legacy && (int) $f['port'] !== 443)) {
             return '';
         }
-        $query = http_build_query([
+        $port = $legacy ? 10000 : (int) $f['port'];
+        $params = [
             'encryption' => 'none', 'security' => 'tls', 'sni' => $f['host'],
             'fp' => 'chrome', 'type' => 'xhttp',
             'path' => $inbound['streamSettings']['xhttpSettings']['path'],
             'mode' => 'packet-up',
-        ], '', '&', PHP_QUERY_RFC3986);
-        return "vless://{$user['id']}@{$f['host']}:10000?$query#"
-            . rawurlencode($user['email'] . ' — резерв');
+        ];
+        if ($port === 443) {
+            $params['host'] = $f['host'];
+            $params['alpn'] = 'h2';
+            // An explicit XMUX object replaces defaults, so retain the existing
+            // pool/request limits while checking idle links sooner and rotating
+            // reusable connections without closing their active streams.
+            $params['extra'] = json_encode(['xmux' => [
+                'maxConnections' => 3, 'hMaxRequestTimes' => '600-900',
+                'hMaxReusableSecs' => '180-300', 'hKeepAlivePeriod' => 15,
+            ]], JSON_UNESCAPED_SLASHES);
+        }
+        $query = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        return "vless://{$user['id']}@{$f['host']}:$port?$query#"
+            . rawurlencode($user['email'] . " — резерв $port");
     }
 
     public function funnelMenu($i)
     {
         $link = $this->funnelLink($i);
+        $legacy = $this->funnelLink($i, true);
         $text = $link
             ? "Резервное подключение VLESS\n\nСкопируй ссылку и импортируй в LxBox."
+                . ($legacy ? "\nНовый профиль «резерв 443» использует обычный HTTPS-порт. Проверь его на LTE."
+                    . " Старый импортированный профиль сам не обновляется." : '')
                 . "\nTailscale на телефоне не нужен."
                 . "\n\nВ настройках этого узла → TLS поставь «Выключено»:"
                 . "\n• SNI в смешанном регистре"
@@ -9319,9 +9338,17 @@ DNS-over-HTTPS with IP:
                 . htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
                 . "</code></pre>"
             : 'Резервное подключение сейчас недоступно.';
+        if ($legacy) {
+            $text .= "\n\nПрежний резерв 10000 для Wi-Fi тоже доступен:\n<pre><code>"
+                . htmlspecialchars($legacy, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                . "</code></pre>";
+        }
         $data = [];
         if ($link) {
-            $data[] = [['text' => 'QR резервного подключения', 'callback_data' => "/qrXray {$i}_4"]];
+            $data[] = [['text' => $legacy ? 'QR резерва 443' : 'QR резервного подключения', 'callback_data' => "/qrXray {$i}_4"]];
+        }
+        if ($legacy) {
+            $data[] = [['text' => 'QR прежнего резерва 10000', 'callback_data' => "/qrXray {$i}_5"]];
         }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
         $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
