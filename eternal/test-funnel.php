@@ -147,4 +147,33 @@ $bot->pacFixture['eternal_warp']['shadowrocket'] = $sr;
 $bot->pacFixture['eternal_warp']['enabled'] = false;
 $bot->shadowrocketMenu(0);
 check(strpos($bot->rendered[0], 'TEST-SR') === false, 'Disabled Shadowrocket credentials stay private');
+$bot->pacFixture['eternal_warp']['enabled'] = true;
+$alternative = $warpFixture;
+$alternative['outbounds'][0]['tag'] = 'Eternal · WARP 2';
+$alternative['endpoints'][0]['private_key'] = 'TEST-ALTERNATIVE';
+$alternative['endpoints'][0]['i1'] = '<b 0x' . str_repeat('ab', 1250) . '>';
+$bot->pacFixture['eternal_warp']['android_alternative'] = [
+    'enabled' => true, 'uuid' => $uuid, 'profile' => $alternative,
+];
+$bot->input['callback'] = '/warpAlternativeMenu 0';
+$bot->action();
+check(preg_match('~<pre><code>(.*?)</code></pre>~s', $bot->rendered[0], $m) === 1, 'Alternative callback exports an import');
+check(json_decode(html_entity_decode($m[1], ENT_QUOTES, 'UTF-8'), true) === $alternative, 'Long CPS and new key survive copying');
+check(mb_strlen(html_entity_decode(strip_tags($bot->rendered[0]), ENT_QUOTES, 'UTF-8')) < 4096, 'Alternative fits Telegram');
+$bot->warpMenu(0);
+check(in_array('/warpAlternativeMenu 0', array_column(array_merge(...$bot->rendered[1]), 'callback_data'), true), 'Alternative is discoverable');
+check($bot->warpAlternativeProfile(99) === '', 'No alternative for a missing user');
+$bot->xrayFixture['inbounds'][0]['settings']['clients'][0]['id'] = 'disabled-user';
+check($bot->warpAlternativeProfile(0) === '', 'No alternative disclosure after user disable');
+$bot->xrayFixture = $original;
+$bot->pacFixture['eternal_warp']['android_alternative']['profile']['outbounds'][0]['uuid'] = 'wrong-user';
+check($bot->warpAlternativeProfile(0) === '', 'Reject alternative UUID mismatch');
+$bot->pacFixture['eternal_warp']['android_alternative']['profile'] = $alternative;
+$bot->pacFixture['eternal_warp']['android_alternative']['profile']['outbounds'][0]['transport']['path'] = '/stale';
+check($bot->warpAlternativeProfile(0) === '', 'Reject stale alternative transport');
+$bot->pacFixture['eternal_warp']['android_alternative']['profile'] = $alternative;
+$bot->pacFixture['eternal_warp']['android_alternative']['enabled'] = false;
+$bot->warpAlternativeMenu(0);
+check(strpos($bot->rendered[0], 'TEST-ALTERNATIVE') === false, 'Disabled alternative stays private');
+
 echo "PASS: fallback links, TLS, QR, WARP/Shadowrocket imports, CPS escaping and per-user isolation\n";

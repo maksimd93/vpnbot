@@ -503,6 +503,9 @@ class Bot
             case preg_match('~^/warpMenu (\d+)$~', $this->input['callback'], $m):
                 $this->warpMenu($m[1]);
                 break;
+            case preg_match('~^/warpAlternativeMenu (\d+)$~', $this->input['callback'], $m):
+                $this->warpAlternativeMenu($m[1]);
+                break;
             case preg_match('~^/shadowrocketMenu (\d+)_([12])$~', $this->input['callback'], $m):
                 $this->shadowrocketMenu($m[1], (int) $m[2]);
                 break;
@@ -9407,8 +9410,48 @@ DNS-over-HTTPS with IP:
         if ($this->shadowrocketProfile($i)) {
             $data[] = [['text' => 'Настроить Shadowrocket', 'callback_data' => "/shadowrocketMenu {$i}_1"]];
         }
+        if ($this->warpAlternativeProfile($i)) {
+            $data[] = [['text' => 'LxBox — WARP 2', 'callback_data' => "/warpAlternativeMenu $i"]];
+        }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
         $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
+    }
+
+    public function warpAlternativeProfile($i)
+    {
+        if (!$this->warpProfile($i)) return '';
+        $w = $this->getPacConf()['eternal_warp'];
+        $a = $w['android_alternative'] ?? [];
+        $profile = $a['profile'] ?? [];
+        $main = $profile['outbounds'][0] ?? [];
+        $endpoint = $profile['endpoints'][0] ?? [];
+        $original = $w['profile']['outbounds'][0];
+        if (empty($a['enabled']) || ($a['uuid'] ?? '') !== $w['uuid']
+            || ($main['uuid'] ?? '') !== $w['uuid']
+            || ($main['type'] ?? '') !== 'vless'
+            || ($main['tag'] ?? '') !== 'Eternal · WARP 2'
+            || ($main['transport'] ?? null) != $original['transport']
+            || ($main['server'] ?? null) !== ($original['server'] ?? null)
+            || ($main['server_port'] ?? null) !== ($original['server_port'] ?? null)
+            || ($main['tls'] ?? null) != ($original['tls'] ?? null)
+            || empty($main['detour']) || $main['detour'] !== ($endpoint['tag'] ?? null)
+            || ($endpoint['type'] ?? '') !== 'wireguard'
+            || empty($endpoint['i1']) || empty($endpoint['private_key'])
+            || $endpoint['private_key'] === ($w['profile']['endpoints'][0]['private_key'] ?? null)) return '';
+        $json = json_encode($profile, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return $json !== false && strlen($json) <= 3700 ? $json : '';
+    }
+
+    public function warpAlternativeMenu($i)
+    {
+        $profile = $this->warpAlternativeProfile($i);
+        $text = $profile
+            ? "LxBox — WARP 2\n\nСкопируй весь блок → LxBox → + → импорт из буфера."
+                . " Выбери «Eternal · WARP 2» и переподключись.\nТолько для твоего Android."
+                . "\n\n<pre><code>" . htmlspecialchars($profile, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code></pre>"
+            : 'Альтернативный профиль для этого пользователя сейчас недоступен.';
+        $this->update($this->input['chat'], $this->input['message_id'], $text,
+            [[['text' => $this->i18n('back'), 'callback_data' => "/warpMenu $i"]]]);
     }
 
     public function shadowrocketProfile($i): array
