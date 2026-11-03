@@ -503,6 +503,9 @@ class Bot
             case preg_match('~^/cdnMenu (\d+)(?:_([01]))?$~', $this->input['callback'], $m):
                 $this->cdnMenu($m[1], !empty($m[2]));
                 break;
+            case preg_match('~^/mobileHop (\d+)$~', $this->input['callback'], $m):
+                $this->sendMobileHop($m[1]);
+                break;
             case preg_match('~^/cdnShadowrocketMenu (\d+)_([12])$~', $this->input['callback'], $m):
                 $this->cdnShadowrocketMenu($m[1], (int) $m[2]);
                 break;
@@ -9458,11 +9461,65 @@ DNS-over-HTTPS with IP:
             $data[] = [['text' => $tcp ? 'Быстрый H3' : 'Для LTE (TCP)',
                 'callback_data' => "/cdnMenu $i" . ($tcp ? '' : '_1')]];
         }
+        if ($this->mobileHopProfile($i)) {
+            $data[] = [['text' => 'Мобильный маршрут LxBox', 'callback_data' => "/mobileHop $i"]];
+        }
         if ($profile && $this->cdnShadowrocketProfile($i)) {
             $data[] = [['text' => 'Настроить Shadowrocket', 'callback_data' => "/cdnShadowrocketMenu {$i}_1"]];
         }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
         $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
+    }
+
+    public function mobileHopProfile($i): array
+    {
+        $pac = $this->getPacConf();
+        $cdn = $pac['eternal_cdn'] ?? [];
+        $grpc = $pac['grpc_reality'] ?? [];
+        $ingress = $cdn['mobile_first_hop'] ?? null;
+        $user = $this->getXray()['inbounds'][0]['settings']['clients'][$i] ?? [];
+        if (empty($cdn['enabled']) || empty($grpc['enabled']) || empty($grpc['publicKey'])
+            || empty($grpc['domain']) || empty($grpc['service']) || !isset($grpc['shortId'])
+            || !filter_var($this->ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) || !empty($user['off'])
+            || empty($user['id']) || ($cdn['uuid'] ?? null) !== $user['id']
+            || !is_string($ingress) || trim($ingress) === '' || strlen($ingress) > 100
+            || preg_match('/[[:cntrl:]]/', $ingress)) {
+            return [];
+        }
+        $ingressTag = 'eternal-mobile-ingress';
+        $exitTag = 'Eternal gRPC для цепочки';
+        $folderId = 'eternal-mobile-' . substr(hash('sha256', $user['id']), 0, 16);
+        $uri = explode('#', $this->grpcRealityLink($i, $this->ip), 2)[0] . '#' . rawurlencode($exitTag);
+        // LxBox matches the first hop on the phone, including nodes inside subscriptions.
+        // No WireGuard private key or change to the user's default route is needed.
+        return [
+            'lx_backup' => 2,
+            'exported_by' => ['app' => 'lxbox', 'version' => 'vpnbot', 'platform' => 'android'],
+            'exported_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'directions' => [['tag' => $ingressTag, 'label' => 'Вход для Eternal',
+                'filter' => preg_quote(trim($ingress), '/')]],
+            'sources' => [
+                ['kind' => 'folder', 'id' => $folderId, 'name' => 'Выход Eternal для LTE', 'enabled' => true,
+                    'nodes' => [['kind' => 'server', 'tag' => $exitTag, 'enabled' => true,
+                        'origin' => ['kind' => 'uri', 'raw' => $uri]]]],
+                ['kind' => 'chain', 'tag' => 'Eternal · Мобильный', 'enabled' => true,
+                    'hops' => [['tag' => $ingressTag], ['folder_id' => $folderId, 'tag' => $exitTag]]],
+            ],
+        ];
+    }
+
+    public function sendMobileHop($i)
+    {
+        $profile = $this->mobileHopProfile($i);
+        if (!$profile) {
+            $this->cdnMenu($i);
+            return;
+        }
+        $file = new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
+            | JSON_UNESCAPED_SLASHES), 'Eternal-Mobile-LxBox.json', 'application/json');
+        $this->sendFile($this->input['from'], $file, 'Сохрани файл. В LxBox открой ≡ → Резервное копирование → Импорт.'
+            . ' Выбери файл и «Объединить с текущими». Оставь отмеченными списки серверов и маршрутизацию.'
+            . ' Затем выбери «Eternal · Мобильный». В его диагностике можно замерить оба участка по позициям.');
     }
 
     public function cdnShadowrocketProfile($i): array
@@ -9705,12 +9762,13 @@ DNS-over-HTTPS with IP:
         ];
     }
 
-    public function grpcRealityLink($i)
+    public function grpcRealityLink($i, $server = null)
     {
         $c = $this->getXray();
         $g = $this->grpcRealityConf();
         $u = $c['inbounds'][0]['settings']['clients'][$i];
-        return "vless://{$u['id']}@{$this->getDomain()}:443"
+        $server = $server ?? $this->getDomain();
+        return "vless://{$u['id']}@{$server}:443"
             . "?encryption=none"
             . "&security=reality"
             . "&sni={$g['domain']}"
@@ -10369,6 +10427,8 @@ DNS-over-HTTPS with IP:
         $res = curl_exec($ch);
         $r   = json_decode($res, true);
         if (!empty($res['description']) || is_null($res)) {
+            // Uploaded configuration documents can contain VPN credentials.
+            if ($method === 'sendDocument' && is_array($data)) unset($data['document']);
             file_put_contents('/logs/requests_error', var_export([
                 'r' => [
                     'method' => $method,

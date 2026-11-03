@@ -6,6 +6,7 @@ class CdnTestBot extends Bot
     public $pacFixture;
     public $xrayFixture;
     public $rendered;
+    public $sentFile;
     public function __construct()
     {
         $uuid = '00000000-0000-4000-8000-000000000001';
@@ -49,6 +50,7 @@ class CdnTestBot extends Bot
     public function linkXray($i, $s = false) { return 'vless://TEST-ORIGINAL'; }
     public function i18n(string $menu): string { return $menu; }
     public function update($chat, $message_id, $text, $button = false, $reply = false, $mode = 'HTML') { $this->rendered = [$text, $button]; }
+    public function sendFile($chat, $file, $caption = false, $to = false) { $this->sentFile = [$chat, $file, $caption]; }
 }
 function cdnCheck($ok, $message) { if (!$ok) throw new RuntimeException($message); }
 $bot = new CdnTestBot();
@@ -194,3 +196,33 @@ $bot->pacFixture['eternal_cdn']['enabled'] = false;
 $bot->cdnMenu(0, true);
 cdnCheck(strpos($bot->rendered[0], 'FAKE-LTE-SEPARATE-P256') === false && strpos($bot->rendered[0], '<pre>') === false, 'Disabled CDN does not expose the TCP account');
 echo "PASS: Turbo H3, optional separate LTE/TCP, Shadowrocket imports, TLS, ownership, copying and stale-config guards; no Telegram calls\n";
+
+$bot->pacFixture = $originalPac;
+$bot->ip = '192.0.2.19';
+$bot->pacFixture['grpc_reality'] = ['enabled' => true, 'domain' => 'example.com', 'publicKey' => 'TEST-PUBLIC',
+    'shortId' => '01020304', 'service' => 'test-service'];
+cdnCheck(!$bot->mobileHopProfile(0), 'Local ingress requires configuration');
+$bot->pacFixture['eternal_cdn']['mobile_first_hop'] = 'Existing [WG]';
+$bot->input['from'] = 9;
+$bot->input['callback'] = '/mobileHop 0';
+$bot->action();
+[$recipient, $file, $caption] = $bot->sentFile;
+$backup = json_decode($file->data, true, 512, JSON_THROW_ON_ERROR);
+cdnCheck($recipient === 9 && $file->postname === 'Eternal-Mobile-LxBox.json', 'Document goes only to the requesting user');
+cdnCheck($backup['lx_backup'] === 2 && !array_intersect(['route', 'dns', 'vars', 'rules'], array_keys($backup)), 'Additive LxBox file');
+[$folder, $chain] = $backup['sources'];
+$entry = $folder['nodes'][0];
+$direction = $backup['directions'][0];
+cdnCheck(preg_match('/' . $direction['filter'] . '/iu', '🏠 Existing [WG]') === 1
+    && preg_match('/' . $direction['filter'] . '/iu', $chain['tag']) === 0, 'Match the local node literally and exclude the chain');
+cdnCheck($chain['hops'] === [['tag' => $direction['tag']], ['folder_id' => $folder['id'], 'tag' => $entry['tag']]], 'Phone hop precedes scoped Eternal exit');
+cdnCheck(parse_url($entry['origin']['raw'], PHP_URL_HOST) === $bot->ip
+    && parse_url($bot->grpcRealityLink(0), PHP_URL_HOST) === 'original.example'
+    && parse_url($entry['origin']['raw'], PHP_URL_QUERY) === parse_url($bot->grpcRealityLink(0), PHP_URL_QUERY)
+    && strpos($file->data, 'PRIVATE') === false, 'Pin only the mobile exit address, preserve REALITY parameters and omit first-hop secrets');
+$bot->cdnMenu(0);
+cdnCheck(in_array('/mobileHop 0', array_column(array_merge(...$bot->rendered[1]), 'callback_data'), true), 'Menu opens the document');
+cdnCheck(!$bot->mobileHopProfile(1) && !$bot->mobileHopProfile(99), 'Only the configured owner gets the route');
+$bot->pacFixture['grpc_reality']['enabled'] = false;
+cdnCheck(!$bot->mobileHopProfile(0), 'Disabled gRPC does not generate a route');
+echo "PASS: mobile hop document, literal match, ordered references, private delivery and ownership\n";
