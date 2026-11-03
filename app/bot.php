@@ -428,6 +428,9 @@ class Bot
             case preg_match('~^/changeHysteriaPass$~', $this->input['callback'], $m):
                 $this->changeHysteriaPass();
                 break;
+            case $this->input['callback'] === '/eternalAutoFile':
+                $this->sendEternalAutoFile();
+                break;
             case preg_match('~^/changeOcDns$~', $this->input['callback'], $m):
                 $this->changeOcDns();
                 break;
@@ -6189,6 +6192,75 @@ DNS-over-HTTPS with IP:
             . '#' . rawurlencode('Eternal · Hysteria 443');
     }
 
+    public function funnelAddresses(string $host): array
+    {
+        $records = @dns_get_record($host, DNS_A);
+        if (!$records) return [];
+        $addresses = [];
+        foreach (array_column($records, 'ip') as $ip) {
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) continue;
+            // A tailnet resolver can return a private 100.64.0.0/10 MagicDNS address.
+            if ((ip2long($ip) >> 22) === (ip2long('100.64.0.0') >> 22) || ord(inet_pton($ip)[0]) >= 224) continue;
+            $addresses[] = $ip;
+        }
+        sort($addresses, SORT_STRING);
+        return array_slice(array_unique($addresses), 0, 2);
+    }
+
+    public function eternalAutoProfile(bool $resolve = true): array
+    {
+        $pac = $this->getPacConf();
+        $hy = $this->directHysteriaLink();
+        $owner = $pac['eternal_cdn']['uuid'] ?? '';
+        if ($hy === '' || !$owner || empty($pac['grpc_reality']['enabled'])) return [];
+        foreach ($this->getXray()['inbounds'][0]['settings']['clients'] ?? [] as $i => $user) {
+            if (($user['id'] ?? null) !== $owner || !empty($user['off'])) continue;
+            $backup = $this->funnelLink($i);
+            if (!$backup || parse_url($backup, PHP_URL_PORT) !== 443) return [];
+            // Numeric relay entries can start before the phone has working DNS. Keep the
+            // DNS name too, so a later change of the relay's A records can still be found.
+            $links = [];
+            if ($resolve) {
+                foreach ($this->funnelAddresses(parse_url($backup, PHP_URL_HOST)) as $n => $ip) {
+                    $links['Резерв по IP ' . ($n + 1)] = $this->funnelLink($i, false, $ip);
+                }
+            }
+            $links['Резерв по имени'] = $backup;
+            $links['Прямой Hysteria'] = $hy;
+            $links['Прямой gRPC'] = $this->grpcRealityLink($i);
+            $nodes = [];
+            foreach ($links as $tag => $uri) {
+                $nodes[] = ['kind' => 'server', 'enabled' => true, 'tag' => $tag,
+                    'origin' => ['kind' => 'uri', 'raw' => explode('#', $uri, 2)[0] . '#' . rawurlencode($tag)]];
+            }
+            return [
+                'lx_backup' => 2, 'exported_by' => ['app' => 'lxbox', 'version' => 'vpnbot', 'platform' => 'android'],
+                'exported_at' => gmdate(DATE_ATOM),
+                'sources' => [['kind' => 'folder', 'id' => 'eternal-only-' . substr(hash('sha256', $owner), 0, 16),
+                    'name' => 'Подключения Eternal', 'enabled' => true, 'nodes' => $nodes,
+                    'tls' => ['fragment' => false, 'record_fragment' => false, 'mixed_case_sni' => false],
+                    'replace' => ['mode' => 'auto', 'tag' => 'Eternal · Авто', 'auto' => [
+                        'mode' => 'least_test', 'url' => 'https://1.1.1.1/cdn-cgi/trace', 'interval' => '1m',
+                        'tolerance' => 30, 'interrupt_exist_connections' => false]]]],
+            ];
+        }
+        return [];
+    }
+
+    public function sendEternalAutoFile()
+    {
+        $profile = $this->eternalAutoProfile();
+        if (!$profile) {
+            $this->menu('hy');
+            return;
+        }
+        $file = new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
+            | JSON_UNESCAPED_SLASHES), 'Eternal-Auto-LxBox.json', 'application/json');
+        $this->sendFile($this->input['from'], $file, 'Весь трафик этой группы выходит через Eternal. '
+            . 'Hysteria и gRPC подключаются напрямую, резерв использует публичный вход Tailscale. Сохрани файл. '
+            . 'LxBox → ≡ → Резервное копирование → Импорт → Объединить с текущими. Затем выбери «Eternal · Авто».');
+    }
+
     public function hysteriaMenu()
     {
         $pac    = $this->getPacConf();
@@ -6203,6 +6275,9 @@ DNS-over-HTTPS with IP:
         if ($direct !== '') {
             $text[] = "Прямой вход на Eternal по UDP/443. Скопируй строку в LxBox → + → импорт из буфера."
                 . "\n<pre><code>" . htmlspecialchars($direct, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code></pre>";
+            if ($this->eternalAutoProfile(false)) {
+                $data[] = [['text' => 'Автовыбор Eternal с резервом', 'callback_data' => '/eternalAutoFile']];
+            }
         }
         if (!empty($pac['eternal_funnel']['enabled'])) {
             $text[] = "Если адрес сервера недоступен, резервное подключение доступно в разделе VLESS, в меню пользователя.";
@@ -9326,7 +9401,7 @@ DNS-over-HTTPS with IP:
     }
 
     // Eternal's alternate HTTPS entry uses the existing XHTTP inbound and its users.
-    public function funnelLink($i, $legacy = false)
+    public function funnelLink($i, $legacy = false, $edge = null)
     {
         $pac = $this->getPacConf();
         $f = $pac['eternal_funnel'] ?? [];
@@ -9341,6 +9416,8 @@ DNS-over-HTTPS with IP:
             return '';
         }
         $port = $legacy ? 10000 : (int) $f['port'];
+        if ($edge !== null && ($port !== 443 || !filter_var($edge, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4))) return '';
+        $server = $edge ?? $f['host'];
         $params = [
             'encryption' => 'none', 'security' => 'tls', 'sni' => $f['host'],
             'fp' => 'chrome', 'type' => 'xhttp',
@@ -9359,7 +9436,7 @@ DNS-over-HTTPS with IP:
             ]], JSON_UNESCAPED_SLASHES);
         }
         $query = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
-        return "vless://{$user['id']}@{$f['host']}:$port?$query#"
+        return "vless://{$user['id']}@{$server}:$port?$query#"
             . rawurlencode($user['email'] . " — резерв $port");
     }
 
