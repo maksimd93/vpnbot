@@ -500,8 +500,8 @@ class Bot
             case preg_match('~^/funnelMenu (\d+)$~', $this->input['callback'], $m):
                 $this->funnelMenu($m[1]);
                 break;
-            case preg_match('~^/cdnMenu (\d+)$~', $this->input['callback'], $m):
-                $this->cdnMenu($m[1]);
+            case preg_match('~^/cdnMenu (\d+)(?:_([01]))?$~', $this->input['callback'], $m):
+                $this->cdnMenu($m[1], !empty($m[2]));
                 break;
             case preg_match('~^/cdnShadowrocketMenu (\d+)_([12])$~', $this->input['callback'], $m):
                 $this->cdnShadowrocketMenu($m[1], (int) $m[2]);
@@ -9382,7 +9382,7 @@ DNS-over-HTTPS with IP:
     }
 
     // One Android import: MASQUE protects the first hop, then CDN reaches XHTTP.
-    public function cdnProfile($i)
+    public function cdnProfile($i, $tcp = false)
     {
         $pac = $this->getPacConf();
         $cdn = $pac['eternal_cdn'] ?? [];
@@ -9391,7 +9391,8 @@ DNS-over-HTTPS with IP:
         $user = $inbound['settings']['clients'][$i] ?? null;
         $host = $cdn['host'] ?? null;
         $path = $inbound['streamSettings']['xhttpSettings']['path'] ?? null;
-        $profile = $cdn['profile'] ?? [];
+        $profile = $cdn[$tcp ? 'tcp_profile' : 'profile'] ?? [];
+        $phoneKey = $cdn['profile']['outbounds'][0]['private_key'] ?? null;
         $outbounds = $profile['outbounds'] ?? [];
         $masque = $outbounds[0] ?? [];
         $main = $outbounds[1] ?? [];
@@ -9413,15 +9414,17 @@ DNS-over-HTTPS with IP:
             || !is_array($profile) || array_keys($profile) !== ['outbounds']
             || !is_array($outbounds) || array_keys($outbounds) !== [0, 1]
             || ($masque['type'] ?? '') !== 'masque'
-            || ($masque['profile'] ?? '') !== 'cloudflare' || ($masque['vhttp'] ?? '') !== 'h3'
+            || ($masque['profile'] ?? '') !== 'cloudflare' || ($masque['vhttp'] ?? '') !== ($tcp ? 'h2' : 'h3')
             || ($masque['server'] ?? '') !== '162.159.198.2' || ($masque['server_port'] ?? 0) !== 443
             || ($masque['mtu'] ?? 0) !== 1280 || !is_string($masque['tag'] ?? null) || empty($masque['tag'])
             || !is_string($masque['private_key'] ?? null) || empty($masque['private_key'])
+            || ($tcp && (!is_string($phoneKey) || $phoneKey === '' || $masque['private_key'] === $phoneKey))
+            || ($tcp && !empty($masque['tls']['utls']['enabled']))
             || !is_string($masque['public_key'] ?? null) || empty($masque['public_key'])
             || ($masque['tls']['enabled'] ?? false) !== true || !empty($masque['tls']['insecure'])
             || ($masque['tls']['server_name'] ?? '') !== 'www.cloudflare.com'
             || ($main['type'] ?? '') !== 'vless' || ($main['uuid'] ?? '') !== $cdn['uuid']
-            || ($main['tag'] ?? '') !== 'Eternal · Turbo'
+            || ($main['tag'] ?? '') !== ($tcp ? 'Eternal · LTE' : 'Eternal · Turbo')
             || ($main['detour'] ?? null) !== $masque['tag'] || $main['tag'] === $masque['tag']
             || ($main['server'] ?? '') !== $cdn['server'] || ($main['server_port'] ?? 0) !== 443
             || ($tls['enabled'] ?? false) !== true || !empty($tls['insecure'])
@@ -9439,18 +9442,23 @@ DNS-over-HTTPS with IP:
         return $json !== false && strlen($json) <= 3000 ? $json : '';
     }
 
-    public function cdnMenu($i)
+    public function cdnMenu($i, $tcp = false)
     {
-        $profile = $this->cdnProfile($i);
+        $profile = $this->cdnProfile($i, $tcp);
+        $name = $tcp ? 'Eternal · LTE' : 'Eternal · Turbo';
         $text = $profile
-            ? "Eternal · Turbo\n\nСкопируй весь блок → LxBox → + → импорт из буфера обмена."
-                . " Выбери «Eternal · Turbo» и переподключись.\nНужна актуальная версия LxBox."
+            ? "$name\n\nСкопируй весь блок → LxBox → + → импорт из буфера обмена."
+                . " Выбери «$name» и переподключись.\nНужна актуальная версия LxBox."
                 . "\nЕсли первый запрос не прошёл, повтори проверку задержки и открой сайт ещё раз."
                 . "\nПрофиль для одного устройства.\n\n<pre><code>"
                 . htmlspecialchars($profile, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code></pre>"
             : 'CDN-профиль для этого пользователя сейчас недоступен.';
         $data = [];
-        if ($this->cdnShadowrocketProfile($i)) {
+        if ($profile && $this->cdnProfile($i, !$tcp)) {
+            $data[] = [['text' => $tcp ? 'Быстрый H3' : 'Для LTE (TCP)',
+                'callback_data' => "/cdnMenu $i" . ($tcp ? '' : '_1')]];
+        }
+        if ($profile && $this->cdnShadowrocketProfile($i)) {
             $data[] = [['text' => 'Настроить Shadowrocket', 'callback_data' => "/cdnShadowrocketMenu {$i}_1"]];
         }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
