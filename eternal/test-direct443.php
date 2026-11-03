@@ -4,7 +4,9 @@ require $argv[1] ?? __DIR__ . '/../app/bot.php';
 class Direct443TestBot extends Bot
 {
     public $config;
-    public $file;
+    public $documents = [];
+    public $reply;
+    public $edges = ['203.0.113.22', '203.0.113.23'];
     public function __construct() {
         $this->ip = '192.0.2.50';
         $this->input = ['chat' => 1, 'from' => 7, 'callback' => '', 'message' => ''];
@@ -19,8 +21,13 @@ class Direct443TestBot extends Bot
         'settings' => ['clients' => [
         ['id' => '00000000-0000-4000-8000-000000000001', 'email' => 'test']]]]]]; }
     public function i18n(string $menu): string { return $menu; }
-    public function funnelAddresses(string $host): array { return ['203.0.113.22', '203.0.113.23']; }
-    public function sendFile($chat, $file, $caption = false, $to = false) { $this->file = [$chat, $file]; }
+    public function funnelAddresses(string $host): array { return $this->edges; }
+    public function sendFile($chat, $file, $caption = false, $to = false) {
+        $this->documents[] = [$chat, $file, $caption];
+    }
+    public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false) {
+        $this->reply = [$chat, $text];
+    }
 }
 function checkDirect443($result) { if (!$result) throw new RuntimeException('Direct 443 profile mismatch'); }
 $b = new Direct443TestBot();
@@ -38,11 +45,12 @@ checkDirect443($tcp['host'] === $b->ip && $tcp['query'] === $legacy['query'] && 
 if (is_file('/docker/compose')) {
     $menu = $b->hysteriaMenu();
     checkDirect443(strpos($menu['text'], htmlspecialchars($link, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')) !== false);
-    checkDirect443(in_array('/eternalAutoFile', array_column(array_merge(...$menu['data']), 'callback_data'), true));
+    $callbacks = array_column(array_merge(...$menu['data']), 'callback_data');
+    checkDirect443(!array_diff(['/eternalAutoFile', '/eternalExclave', '/eternalShadowrocket'], $callbacks));
 }
 $b->input['callback'] = '/eternalAutoFile';
 $b->action();
-[$chat, $file] = $b->file;
+[$chat, $file] = $b->documents[0];
 $p = json_decode($file->data, true, 512, JSON_THROW_ON_ERROR);
 checkDirect443($chat === 7 && $file->postname === 'Eternal-Auto-Android.json'
     && $p['app'] === 'lxbox' && $p['kind'] === 'backup'
@@ -64,8 +72,41 @@ checkDirect443($unpinned['id'] === $folder['id'] && count($unpinned['nodes']) ==
     && array_column($unpinned['nodes'][3]['group']['members'], 'tag') === array_column(array_slice($unpinned['nodes'], 0, 3), 'tag'));
 checkDirect443(parse_url($folder['nodes'][0]['origin']['raw'], PHP_URL_HOST) === '203.0.113.22'
     && parse_url($folder['nodes'][0]['origin']['raw'], PHP_URL_QUERY) === parse_url($b->funnelLink(0), PHP_URL_QUERY));
+foreach ([2, 1, 0] as $edgeCount) {
+    $b->edges = array_slice($b->edges, 0, $edgeCount);
+    $servers = $b->eternalAutoProfile()['storage']['sources'][0]['nodes'];
+    array_pop($servers); // the LxBox-only group
+    $names = [];
+    foreach ($servers as $server) $names[] = 'Eternal · ' . $server['tag'];
+    foreach (['/eternalExclave', '/eternalShadowrocket'] as $client) {
+        $b->documents = [];
+        $b->input['callback'] = $client;
+        $b->action();
+        checkDirect443(count($b->documents) === ($client === '/eternalExclave' ? 1 : 2));
+        foreach ($b->documents as [$dest, $document, $caption]) {
+            checkDirect443($dest === $b->input['from'] && mb_strlen($caption) <= 1024);
+        }
+        $file = $b->documents[0][1];
+        checkDirect443($file->postname === 'Eternal-Nodes.txt');
+        $urls = explode("\n", rtrim($file->data, "\n"));
+        checkDirect443(count($urls) === count($servers));
+        foreach ($urls as $i => $uri) {
+            checkDirect443(rawurldecode(parse_url($uri, PHP_URL_FRAGMENT)) === $names[$i]
+                && explode('#', $uri, 2)[0] === explode('#', $servers[$i]['origin']['raw'], 2)[0]);
+        }
+        if ($client === '/eternalShadowrocket') {
+            $policy = $b->documents[1][1];
+            checkDirect443($policy->postname === 'Eternal-Auto-Shadowrocket.conf'
+                && $policy->data === "[Proxy Group]\nEternal · Авто = url-test," . implode(',', $names)
+                    . ",interval=60,tolerance=30,timeout=8,url=https://1.1.1.1/cdn-cgi/trace\n\n[Rule]\nFINAL,Eternal · Авто\n");
+        }
+    }
+}
 $b->config['eternal_cdn']['uuid'] = 'other';
 checkDirect443(!$b->eternalAutoProfile());
+$b->documents = [];
+$b->action();
+checkDirect443(!$b->documents && $b->reply[0] === $b->input['from']);
 $b->config['domain'] = $b->ip;
 checkDirect443($b->directHysteriaLink() === '');
-echo "PASS direct Hysteria URI, numeric endpoints, TLS identity, Android backup document and legacy defaults\n";
+echo "PASS direct endpoints, LxBox, Exclave links, Shadowrocket policy, owner gating and legacy defaults\n";

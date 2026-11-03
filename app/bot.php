@@ -431,6 +431,10 @@ class Bot
             case $this->input['callback'] === '/eternalAutoFile':
                 $this->sendEternalAutoFile();
                 break;
+            case $this->input['callback'] === '/eternalExclave':
+            case $this->input['callback'] === '/eternalShadowrocket':
+                $this->sendEternalClientFiles($this->input['callback'] === '/eternalShadowrocket');
+                break;
             case preg_match('~^/changeOcDns$~', $this->input['callback'], $m):
                 $this->changeOcDns();
                 break;
@@ -6207,7 +6211,7 @@ DNS-over-HTTPS with IP:
         return array_slice(array_unique($addresses), 0, 2);
     }
 
-    public function eternalAutoProfile(bool $resolve = true): array
+    private function eternalAutoSources(bool $resolve = true): array
     {
         $pac = $this->getPacConf();
         $hy = $this->directHysteriaLink();
@@ -6228,28 +6232,34 @@ DNS-over-HTTPS with IP:
             $links['Резерв по имени'] = $backup;
             $links['Прямой Hysteria'] = $hy;
             $links['Прямой gRPC'] = $this->grpcRealityLink($i);
-            $folderId = 'eternal-only-' . substr(hash('sha256', $owner), 0, 16);
-            $nodes = [];
-            $members = [];
-            foreach ($links as $tag => $uri) {
-                $nodes[] = ['kind' => 'server', 'enabled' => true, 'tag' => $tag,
-                    'origin' => ['kind' => 'uri', 'raw' => explode('#', $uri, 2)[0] . '#' . rawurlencode($tag)]];
-                $members[] = ['folder_id' => $folderId, 'tag' => $tag];
-            }
-            // This is the record LxBox creates with “Add auto node” inside a folder.
-            // A folder-level auto replacement would hide this member from the selector.
-            $nodes[] = ['kind' => 'auto', 'tag' => 'Eternal · Авто', 'enabled' => true,
-                'group' => ['group_type' => 'urltest', 'members' => $members, 'strategy' => [
-                    'mode' => 'least_test', 'url' => 'https://1.1.1.1/cdn-cgi/trace', 'interval' => '1m',
-                    'tolerance' => 30, 'interrupt_exist_connections' => false]]];
-            $created = gmdate(DATE_ATOM);
-            $folder = ['kind' => 'folder', 'id' => $folderId,
-                'name' => 'Подключения Eternal', 'enabled' => true, 'nodes' => $nodes, 'created_at' => $created,
-                'tls' => ['fragment' => false, 'record_fragment' => false, 'mixed_case_sni' => false]];
-            return ['app' => 'lxbox', 'kind' => 'backup', 'created_at' => $created,
-                'storage' => ['storage_version' => 1, 'sources' => [$folder]]];
+            return ['folder_id' => 'eternal-only-' . substr(hash('sha256', $owner), 0, 16), 'links' => $links];
         }
         return [];
+    }
+
+    public function eternalAutoProfile(bool $resolve = true): array
+    {
+        $source = $this->eternalAutoSources($resolve);
+        if (!$source) return [];
+        $nodes = [];
+        $members = [];
+        foreach ($source['links'] as $tag => $uri) {
+            $nodes[] = ['kind' => 'server', 'enabled' => true, 'tag' => $tag,
+                'origin' => ['kind' => 'uri', 'raw' => explode('#', $uri, 2)[0] . '#' . rawurlencode($tag)]];
+            $members[] = ['folder_id' => $source['folder_id'], 'tag' => $tag];
+        }
+        // This is the record LxBox creates with “Add auto node” inside a folder.
+        // A folder-level auto replacement would hide this member from the selector.
+        $nodes[] = ['kind' => 'auto', 'tag' => 'Eternal · Авто', 'enabled' => true,
+            'group' => ['group_type' => 'urltest', 'members' => $members, 'strategy' => [
+                'mode' => 'least_test', 'url' => 'https://1.1.1.1/cdn-cgi/trace', 'interval' => '1m',
+                'tolerance' => 30, 'interrupt_exist_connections' => false]]];
+        $created = gmdate(DATE_ATOM);
+        $folder = ['kind' => 'folder', 'id' => $source['folder_id'],
+            'name' => 'Подключения Eternal', 'enabled' => true, 'nodes' => $nodes, 'created_at' => $created,
+            'tls' => ['fragment' => false, 'record_fragment' => false, 'mixed_case_sni' => false]];
+        return ['app' => 'lxbox', 'kind' => 'backup', 'created_at' => $created,
+            'storage' => ['storage_version' => 1, 'sources' => [$folder]]];
     }
 
     public function sendEternalAutoFile()
@@ -6268,6 +6278,38 @@ DNS-over-HTTPS with IP:
             . 'нажми ▶ справа от «Eternal · Авто». Если он уже добавлен вручную, повторный импорт не нужен.');
     }
 
+    public function sendEternalClientFiles(bool $shadowrocket)
+    {
+        $source = $this->eternalAutoSources();
+        $chat = $this->input['from'];
+        if (!$source) {
+            $this->send($chat, 'Набор подключений Eternal сейчас недоступен.');
+            return;
+        }
+        $links = [];
+        foreach ($source['links'] as $tag => $uri) {
+            $name = 'Eternal · ' . $tag;
+            $links[$name] = explode('#', $uri, 2)[0] . '#' . rawurlencode($name);
+        }
+        $file = new CURLStringFile(implode("\n", $links) . "\n", 'Eternal-Nodes.txt', 'text/plain');
+        if (!$shadowrocket) {
+            $this->sendFile($chat, $file, 'Exclave → Добавить профиль → Импорт из файла → Eternal-Nodes.txt. '
+                . 'Затем Добавить профиль → Ручные настройки → Балансировщик. Имя «Eternal · Авто», тип «Список», '
+                . 'добавь только узлы из файла. Стратегия leastPing, URL проверки https://1.1.1.1/cdn-cgi/trace, '
+                . 'интервал 60 с. Сохрани, выбери балансировщик и включи VPN.');
+            return;
+        }
+        $this->sendFile($chat, $file, 'Shadowrocket, шаг 1 из 2. Открой Eternal-Nodes.txt, скопируй весь текст. '
+            . 'Открой Shadowrocket и подтверди добавление узлов. Если приглашения нет, нажми «Вставить» '
+            . 'под «Проверкой соединения» на главном экране. Имена узлов начинаются с «Eternal ·».');
+        $policy = "[Proxy Group]\nEternal · Авто = url-test," . implode(',', array_keys($links))
+            . ",interval=60,tolerance=30,timeout=8,url=https://1.1.1.1/cdn-cgi/trace\n\n[Rule]\nFINAL,Eternal · Авто\n";
+        $this->sendFile($chat, new CURLStringFile($policy, 'Eternal-Auto-Shadowrocket.conf', 'text/plain'),
+            'Шаг 2 из 2. Сохрани .conf в «Файлы». Shadowrocket → Конфигурация → Импорт из облака → '
+            . 'Eternal-Auto-Shadowrocket.conf → Использовать конфигурацию. На главной открой «Глобальная маршрутизация» → '
+            . 'Конфигурация. Включи VPN. Правило FINAL направляет трафик в группу «Eternal · Авто».');
+    }
+
     public function hysteriaMenu()
     {
         $pac    = $this->getPacConf();
@@ -6282,8 +6324,12 @@ DNS-over-HTTPS with IP:
         if ($direct !== '') {
             $text[] = "Прямой вход на Eternal по UDP/443. Скопируй строку в LxBox → + → импорт из буфера."
                 . "\n<pre><code>" . htmlspecialchars($direct, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code></pre>";
-            if ($this->eternalAutoProfile(false)) {
+            if ($this->eternalAutoSources(false)) {
                 $data[] = [['text' => 'Автовыбор Eternal с резервом', 'callback_data' => '/eternalAutoFile']];
+                $data[] = [
+                    ['text' => 'Exclave · Android', 'callback_data' => '/eternalExclave'],
+                    ['text' => 'Shadowrocket · iOS', 'callback_data' => '/eternalShadowrocket'],
+                ];
             }
         }
         if (!empty($pac['eternal_funnel']['enabled'])) {
