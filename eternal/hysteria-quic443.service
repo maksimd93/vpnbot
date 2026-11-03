@@ -1,0 +1,14 @@
+[Unit]
+Description=Eternal direct Hysteria on UDP/443
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/eternal-hysteria443
+ExecStart=/usr/sbin/nft -D wan=${WAN} -D public_ip=${PUBLIC_IP} -D backend=${BACKEND} -f @REPO@/eternal/hysteria-quic443.nft
+ExecStop=/usr/sbin/nft delete table ip eternal_hysteria443
+
+[Install]
+WantedBy=multi-user.target

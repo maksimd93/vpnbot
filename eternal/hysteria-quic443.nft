@@ -1,0 +1,12 @@
+# Opt in only on an ingress where UDP/443 has no existing QUIC service.
+# nft -D wan=ens3 -D public_ip=... -D backend=... -f hysteria-quic443.nft
+# Only the first datagram of a new flow is classified. Conntrack routes the rest.
+add table ip eternal_hysteria443
+flush table ip eternal_hysteria443
+table ip eternal_hysteria443 {
+    chain incoming {
+        type nat hook prerouting priority -105; policy accept;
+        iifname $wan ip daddr $public_ip udp dport 443 udp length >= 1208 @th,64,8 & 0xf0 == 0xc0 @th,72,32 0x00000001 counter dnat to $backend:443 comment "QUIC v1 Initial"
+        iifname $wan ip daddr $public_ip udp dport 443 udp length >= 1208 @th,64,8 & 0xf0 == 0xd0 @th,72,32 0x6b3343cf counter dnat to $backend:443 comment "QUIC v2 Initial"
+    }
+}
