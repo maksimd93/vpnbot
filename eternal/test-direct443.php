@@ -44,10 +44,13 @@ $b->input['callback'] = '/eternalAutoFile';
 $b->action();
 [$chat, $file] = $b->file;
 $p = json_decode($file->data, true, 512, JSON_THROW_ON_ERROR);
-checkDirect443($chat === 7 && $file->postname === 'Eternal-Auto-LxBox.json' && $p['lx_backup'] === 2
-    && !array_intersect(['directions', 'route', 'rules', 'vars', 'dns'], array_keys($p)) && count($p['sources']) === 1);
-$folder = $p['sources'][0];
-checkDirect443($folder['replace']['mode'] === 'auto' && $folder['replace']['tag'] === 'Eternal · Авто'
+checkDirect443($chat === 7 && $file->postname === 'Eternal-Auto-Android.json'
+    && $p['app'] === 'lxbox' && $p['kind'] === 'backup'
+    && !array_intersect(['lx_backup', 'exported_by', 'vpn_settings'], array_keys($p)) && $p['storage']['storage_version'] === 1
+    && array_keys($p['storage']) === ['storage_version', 'sources'] && count($p['storage']['sources']) === 1);
+$folder = $p['storage']['sources'][0];
+checkDirect443($folder['kind'] === 'folder' && $folder['created_at'] === $p['created_at']
+    && $folder['replace']['mode'] === 'auto' && $folder['replace']['tag'] === 'Eternal · Авто'
     && $folder['tls']['mixed_case_sni'] === false && count($folder['nodes']) === 5);
 foreach ([$b->funnelLink(0, false, '203.0.113.22'), $b->funnelLink(0, false, '203.0.113.23'), $b->funnelLink(0), $link, $b->grpcRealityLink(0)] as $i => $original) {
     checkDirect443(explode('#', $folder['nodes'][$i]['origin']['raw'])[0] === explode('#', $original)[0]);
@@ -58,4 +61,4 @@ $b->config['eternal_cdn']['uuid'] = 'other';
 checkDirect443(!$b->eternalAutoProfile());
 $b->config['domain'] = $b->ip;
 checkDirect443($b->directHysteriaLink() === '');
-echo "PASS direct Hysteria URI, numeric endpoints, TLS identity and legacy defaults\n";
+echo "PASS direct Hysteria URI, numeric endpoints, TLS identity, Android backup document and legacy defaults\n";

@@ -6233,16 +6233,15 @@ DNS-over-HTTPS with IP:
                 $nodes[] = ['kind' => 'server', 'enabled' => true, 'tag' => $tag,
                     'origin' => ['kind' => 'uri', 'raw' => explode('#', $uri, 2)[0] . '#' . rawurlencode($tag)]];
             }
-            return [
-                'lx_backup' => 2, 'exported_by' => ['app' => 'lxbox', 'version' => 'vpnbot', 'platform' => 'android'],
-                'exported_at' => gmdate(DATE_ATOM),
-                'sources' => [['kind' => 'folder', 'id' => 'eternal-only-' . substr(hash('sha256', $owner), 0, 16),
-                    'name' => 'Подключения Eternal', 'enabled' => true, 'nodes' => $nodes,
-                    'tls' => ['fragment' => false, 'record_fragment' => false, 'mixed_case_sni' => false],
-                    'replace' => ['mode' => 'auto', 'tag' => 'Eternal · Авто', 'auto' => [
-                        'mode' => 'least_test', 'url' => 'https://1.1.1.1/cdn-cgi/trace', 'interval' => '1m',
-                        'tolerance' => 30, 'interrupt_exist_connections' => false]]]],
-            ];
+            $created = gmdate(DATE_ATOM);
+            $folder = ['kind' => 'folder', 'id' => 'eternal-only-' . substr(hash('sha256', $owner), 0, 16),
+                'name' => 'Подключения Eternal', 'enabled' => true, 'nodes' => $nodes, 'created_at' => $created,
+                'tls' => ['fragment' => false, 'record_fragment' => false, 'mixed_case_sni' => false],
+                'replace' => ['mode' => 'auto', 'tag' => 'Eternal · Авто', 'auto' => [
+                    'mode' => 'least_test', 'url' => 'https://1.1.1.1/cdn-cgi/trace', 'interval' => '1m',
+                    'tolerance' => 30, 'interrupt_exist_connections' => false]]];
+            return ['app' => 'lxbox', 'kind' => 'backup', 'created_at' => $created,
+                'storage' => ['storage_version' => 1, 'sources' => [$folder]]];
         }
         return [];
     }
@@ -6255,10 +6254,11 @@ DNS-over-HTTPS with IP:
             return;
         }
         $file = new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
-            | JSON_UNESCAPED_SLASHES), 'Eternal-Auto-LxBox.json', 'application/json');
+            | JSON_UNESCAPED_SLASHES), 'Eternal-Auto-Android.json', 'application/json');
         $this->sendFile($this->input['from'], $file, 'Весь трафик этой группы выходит через Eternal. '
             . 'Hysteria и gRPC подключаются напрямую, резерв использует публичный вход Tailscale. Сохрани файл. '
-            . 'LxBox → ≡ → Резервное копирование → Импорт → Объединить с текущими. Затем выбери «Eternal · Авто».');
+            . 'LxBox → ≡ → Резервное копирование → Импорт → Выбрать файл… → Объединить с текущими. '
+            . 'В предпросмотре должна быть одна папка. Затем выбери «Eternal · Авто».');
     }
 
     public function hysteriaMenu()
