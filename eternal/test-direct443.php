@@ -50,11 +50,18 @@ checkDirect443($chat === 7 && $file->postname === 'Eternal-Auto-Android.json'
     && array_keys($p['storage']) === ['storage_version', 'sources'] && count($p['storage']['sources']) === 1);
 $folder = $p['storage']['sources'][0];
 checkDirect443($folder['kind'] === 'folder' && $folder['created_at'] === $p['created_at']
-    && $folder['replace']['mode'] === 'auto' && $folder['replace']['tag'] === 'Eternal · Авто'
-    && $folder['tls']['mixed_case_sni'] === false && count($folder['nodes']) === 5);
+    && !isset($folder['replace']) && $folder['tls']['mixed_case_sni'] === false);
+$auto = $folder['nodes'][5];
+checkDirect443(array_column($folder['nodes'], 'kind') === ['server', 'server', 'server', 'server', 'server', 'auto']
+    && $auto['tag'] === 'Eternal · Авто' && $auto['enabled'] && $auto['group']['group_type'] === 'urltest'
+    && $auto['group']['strategy']['mode'] === 'least_test' && count($auto['group']['members']) === 5);
 foreach ([$b->funnelLink(0, false, '203.0.113.22'), $b->funnelLink(0, false, '203.0.113.23'), $b->funnelLink(0), $link, $b->grpcRealityLink(0)] as $i => $original) {
     checkDirect443(explode('#', $folder['nodes'][$i]['origin']['raw'])[0] === explode('#', $original)[0]);
+    checkDirect443($auto['group']['members'][$i] === ['folder_id' => $folder['id'], 'tag' => $folder['nodes'][$i]['tag']]);
 }
+$unpinned = $b->eternalAutoProfile(false)['storage']['sources'][0];
+checkDirect443($unpinned['id'] === $folder['id'] && count($unpinned['nodes']) === 4
+    && array_column($unpinned['nodes'][3]['group']['members'], 'tag') === array_column(array_slice($unpinned['nodes'], 0, 3), 'tag'));
 checkDirect443(parse_url($folder['nodes'][0]['origin']['raw'], PHP_URL_HOST) === '203.0.113.22'
     && parse_url($folder['nodes'][0]['origin']['raw'], PHP_URL_QUERY) === parse_url($b->funnelLink(0), PHP_URL_QUERY));
 $b->config['eternal_cdn']['uuid'] = 'other';
