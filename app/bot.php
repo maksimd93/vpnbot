@@ -500,6 +500,12 @@ class Bot
             case preg_match('~^/funnelMenu (\d+)$~', $this->input['callback'], $m):
                 $this->funnelMenu($m[1]);
                 break;
+            case preg_match('~^/cdnMenu (\d+)$~', $this->input['callback'], $m):
+                $this->cdnMenu($m[1]);
+                break;
+            case preg_match('~^/cdnShadowrocketMenu (\d+)_([12])$~', $this->input['callback'], $m):
+                $this->cdnShadowrocketMenu($m[1], (int) $m[2]);
+                break;
             case preg_match('~^/warpMenu (\d+)$~', $this->input['callback'], $m):
                 $this->warpMenu($m[1]);
                 break;
@@ -7411,6 +7417,9 @@ DNS-over-HTTPS with IP:
                 'callback_data' => "/delxr $i",
             ],
         ];
+        if ($this->cdnProfile($i)) {
+            $data[] = [['text' => 'Быстрый CDN', 'callback_data' => "/cdnMenu $i"]];
+        }
         $data[] = [
             [
                 'text'          => $this->i18n('back'),
@@ -9365,7 +9374,138 @@ DNS-over-HTTPS with IP:
         if ($this->warpProfile($i)) {
             $data[] = [['text' => 'Ускоренный WARP', 'callback_data' => "/warpMenu $i"]];
         }
+        if ($this->cdnProfile($i)) {
+            $data[] = [['text' => 'Быстрый CDN', 'callback_data' => "/cdnMenu $i"]];
+        }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
+        $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
+    }
+
+    // One Android import: MASQUE protects the first hop, then CDN reaches XHTTP.
+    public function cdnProfile($i)
+    {
+        $pac = $this->getPacConf();
+        $cdn = $pac['eternal_cdn'] ?? [];
+        $xray = $this->getXray();
+        $inbound = $xray['inbounds'][0] ?? [];
+        $user = $inbound['settings']['clients'][$i] ?? null;
+        $host = $cdn['host'] ?? null;
+        $path = $inbound['streamSettings']['xhttpSettings']['path'] ?? null;
+        $profile = $cdn['profile'] ?? [];
+        $outbounds = $profile['outbounds'] ?? [];
+        $masque = $outbounds[0] ?? [];
+        $main = $outbounds[1] ?? [];
+        $tls = $main['tls'] ?? [];
+        $transport = $main['transport'] ?? [];
+        if (empty($cdn['enabled']) || !is_array($user) || !empty($user['off'])
+            || !is_string($cdn['uuid'] ?? null) || empty($cdn['uuid'])
+            || !hash_equals($cdn['uuid'], (string) ($user['id'] ?? ''))
+            || ($pac['transport'] ?? '') !== 'xhttp'
+            || ($inbound['streamSettings']['network'] ?? '') !== 'xhttp'
+            || !is_string($path) || $path === '' || $path[0] !== '/'
+            || strlen($path) > 1024 || preg_match('/[\x00-\x20\x7f]/', $path)
+            || ($cdn['live_path'] ?? null) !== $path
+            || !is_string($host) || strlen($host) > 253 || strpos($host, '.') === false
+            || !filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
+            || filter_var($host, FILTER_VALIDATE_IP)
+            || ($cdn['server'] ?? '') !== '188.114.97.1'
+            || (int) ($cdn['port'] ?? 0) !== 443
+            || !is_array($profile) || array_keys($profile) !== ['outbounds']
+            || !is_array($outbounds) || array_keys($outbounds) !== [0, 1]
+            || ($masque['type'] ?? '') !== 'masque'
+            || ($masque['profile'] ?? '') !== 'cloudflare' || ($masque['vhttp'] ?? '') !== 'h3'
+            || ($masque['server'] ?? '') !== '162.159.198.2' || ($masque['server_port'] ?? 0) !== 443
+            || ($masque['mtu'] ?? 0) !== 1280 || !is_string($masque['tag'] ?? null) || empty($masque['tag'])
+            || !is_string($masque['private_key'] ?? null) || empty($masque['private_key'])
+            || !is_string($masque['public_key'] ?? null) || empty($masque['public_key'])
+            || ($masque['tls']['enabled'] ?? false) !== true || !empty($masque['tls']['insecure'])
+            || ($masque['tls']['server_name'] ?? '') !== 'www.cloudflare.com'
+            || ($main['type'] ?? '') !== 'vless' || ($main['uuid'] ?? '') !== $cdn['uuid']
+            || ($main['tag'] ?? '') !== 'Eternal · Turbo'
+            || ($main['detour'] ?? null) !== $masque['tag'] || $main['tag'] === $masque['tag']
+            || ($main['server'] ?? '') !== $cdn['server'] || ($main['server_port'] ?? 0) !== 443
+            || ($tls['enabled'] ?? false) !== true || !empty($tls['insecure'])
+            || ($tls['server_name'] ?? '') !== $host || ($tls['alpn'] ?? []) !== ['h2']
+            || ($transport['type'] ?? '') !== 'xhttp' || ($transport['mode'] ?? '') !== 'packet-up'
+            || ($transport['host'] ?? '') !== $host || ($transport['path'] ?? '') !== $path) {
+            return '';
+        }
+        foreach ($outbounds as $outbound) {
+            foreach (['bind_interface', 'inet4_bind_address', 'inet6_bind_address'] as $field) {
+                if (array_key_exists($field, $outbound)) return '';
+            }
+        }
+        $json = json_encode($profile, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return $json !== false && strlen($json) <= 3000 ? $json : '';
+    }
+
+    public function cdnMenu($i)
+    {
+        $profile = $this->cdnProfile($i);
+        $text = $profile
+            ? "Eternal · Turbo\n\nСкопируй весь блок → LxBox → + → импорт из буфера обмена."
+                . " Выбери «Eternal · Turbo» и переподключись.\nНужна актуальная версия LxBox."
+                . "\nЕсли первый запрос не прошёл, повтори проверку задержки и открой сайт ещё раз."
+                . "\nПрофиль для одного устройства.\n\n<pre><code>"
+                . htmlspecialchars($profile, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code></pre>"
+            : 'CDN-профиль для этого пользователя сейчас недоступен.';
+        $data = [];
+        if ($this->cdnShadowrocketProfile($i)) {
+            $data[] = [['text' => 'Настроить Shadowrocket', 'callback_data' => "/cdnShadowrocketMenu {$i}_1"]];
+        }
+        $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
+        $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
+    }
+
+    public function cdnShadowrocketProfile($i): array
+    {
+        if (!$this->cdnProfile($i)) return [];
+        $cdn = $this->getPacConf()['eternal_cdn'];
+        $s = $cdn['shadowrocket'] ?? [];
+        if (($s['uuid'] ?? null) !== $cdn['uuid']
+            || !is_string($s['masque_uri'] ?? null) || strlen($s['masque_uri']) > 2000
+            || !is_string($s['vless_uri'] ?? null) || strlen($s['vless_uri']) > 1000) return [];
+        $m = parse_url($s['masque_uri']);
+        $v = parse_url($s['vless_uri']);
+        if (!is_array($m) || !is_array($v)
+            || ($m['scheme'] ?? '') !== 'masque' || ($m['host'] ?? '') !== '162.159.198.2' || ($m['port'] ?? 0) !== 443
+            || ($v['scheme'] ?? '') !== 'vless' || ($v['user'] ?? '') !== $cdn['uuid']
+            || ($v['host'] ?? '') !== $cdn['server'] || ($v['port'] ?? 0) !== 443) return [];
+        parse_str($m['query'] ?? '', $mq);
+        parse_str($v['query'] ?? '', $vq);
+        foreach (['privateKey', 'publicKey', 'ip', 'dns'] as $field) {
+            if (!is_string($mq[$field] ?? null) || $mq[$field] === '') return [];
+        }
+        if ($mq['privateKey'] === $cdn['profile']['outbounds'][0]['private_key']
+            || ($mq['udp'] ?? '') !== '1'
+            || ($vq['security'] ?? '') !== 'tls' || !empty($vq['insecure']) || !empty($vq['allowInsecure'])
+            || ($vq['type'] ?? '') !== 'xhttp' || ($vq['mode'] ?? '') !== 'packet-up'
+            || ($vq['sni'] ?? '') !== $cdn['host'] || ($vq['host'] ?? '') !== $cdn['host']
+            || ($vq['path'] ?? '') !== $cdn['live_path'] || ($vq['alpn'] ?? '') !== 'h2'
+            || rawurldecode($v['fragment'] ?? '') !== 'Eternal-Turbo-SR') return [];
+        return $s;
+    }
+
+    public function cdnShadowrocketMenu($i, $step = 1)
+    {
+        $s = $this->cdnShadowrocketProfile($i);
+        $data = [];
+        if ($s) {
+            $first = (int) $step !== 2;
+            $text = $first
+                ? "Shadowrocket — Turbo: шаг 1 из 2\n\nСкопируй ссылку и импортируй в Shadowrocket. Назови узел MASQUE-SR."
+                    . "\nОткрой его ⓘ: обязательно поставь SNI www.cloudflare.com, транспорт HTTP/3 (H3), MTU 1280 и сохрани."
+                    . "\nЗатем перейди к шагу 2. Ключ отдельный от Android."
+                : "Shadowrocket — Turbo: шаг 2 из 2\n\nСкопируй ссылку и импортируй Eternal-Turbo-SR."
+                    . " В его ⓘ → Proxy Pass / Через прокси (иногда «Пароль прокси») выбери MASQUE-SR и сохрани."
+                    . "\nВыбери Eternal-Turbo-SR и подключись. Для первой проверки: Глобальная маршрутизация → Прокси.";
+            $text .= "\n\n<pre><code>" . htmlspecialchars($s[$first ? 'masque_uri' : 'vless_uri'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</code></pre>";
+            $data[] = [['text' => $first ? 'Шаг 2: Eternal' : 'Шаг 1: MASQUE',
+                'callback_data' => "/cdnShadowrocketMenu {$i}_" . ($first ? 2 : 1)]];
+        } else {
+            $text = 'Turbo-профиль Shadowrocket для этого пользователя сейчас недоступен.';
+        }
+        $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/cdnMenu $i"]];
         $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
     }
 
@@ -9412,6 +9552,9 @@ DNS-over-HTTPS with IP:
         }
         if ($this->warpAlternativeProfile($i)) {
             $data[] = [['text' => 'LxBox — WARP 2', 'callback_data' => "/warpAlternativeMenu $i"]];
+        }
+        if ($this->cdnProfile($i)) {
+            $data[] = [['text' => 'Быстрый CDN', 'callback_data' => "/cdnMenu $i"]];
         }
         $data[] = [['text' => $this->i18n('back'), 'callback_data' => "/userXr $i"]];
         $this->update($this->input['chat'], $this->input['message_id'], $text, $data);
