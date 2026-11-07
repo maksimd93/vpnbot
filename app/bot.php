@@ -435,6 +435,12 @@ class Bot
             case $this->input['callback'] === '/eternalShadowrocket':
                 $this->sendEternalClientFiles($this->input['callback'] === '/eternalShadowrocket');
                 break;
+            case $this->input['callback'] === '/eternalExitMenu':
+                $this->eternalExitMenu();
+                break;
+            case preg_match('~^/eternalExit (lxbox|exclave|shadowrocket)$~', $this->input['callback'], $m):
+                $this->sendEternalExitFiles($m[1]);
+                break;
             case preg_match('~^/changeOcDns$~', $this->input['callback'], $m):
                 $this->changeOcDns();
                 break;
@@ -785,6 +791,7 @@ class Bot
 
     public function restartXray($c, $norestart = false)
     {
+        $c = $this->eternalExitRouting($c);
         $c['inbounds'][0]['settings']['clients'] = array_values($c['inbounds'][0]['settings']['clients']);
         // eternal: parallel VLESS gRPC Reality inbound, rebuilt from the main client list on every restart
         $c['inbounds'] = array_values(array_filter($c['inbounds'], fn($v) => ($v['tag'] ?? '') != 'vless_grpc_reality'));
@@ -6240,6 +6247,11 @@ DNS-over-HTTPS with IP:
     public function eternalAutoProfile(bool $resolve = true): array
     {
         $source = $this->eternalAutoSources($resolve);
+        return $this->eternalFolderProfile($source, 'Подключения Eternal', 'Eternal · Авто');
+    }
+
+    private function eternalFolderProfile(array $source, string $name, string $group): array
+    {
         if (!$source) return [];
         $nodes = [];
         $members = [];
@@ -6250,13 +6262,13 @@ DNS-over-HTTPS with IP:
         }
         // This is the record LxBox creates with “Add auto node” inside a folder.
         // A folder-level auto replacement would hide this member from the selector.
-        $nodes[] = ['kind' => 'auto', 'tag' => 'Eternal · Авто', 'enabled' => true,
+        $nodes[] = ['kind' => 'auto', 'tag' => $group, 'enabled' => true,
             'group' => ['group_type' => 'urltest', 'members' => $members, 'strategy' => [
                 'mode' => 'least_test', 'url' => 'https://1.1.1.1/cdn-cgi/trace', 'interval' => '1m',
                 'tolerance' => 30, 'interrupt_exist_connections' => false]]];
         $created = gmdate(DATE_ATOM);
         $folder = ['kind' => 'folder', 'id' => $source['folder_id'],
-            'name' => 'Подключения Eternal', 'enabled' => true, 'nodes' => $nodes, 'created_at' => $created,
+            'name' => $name, 'enabled' => true, 'nodes' => $nodes, 'created_at' => $created,
             'tls' => ['fragment' => false, 'record_fragment' => false, 'mixed_case_sni' => false]];
         return ['app' => 'lxbox', 'kind' => 'backup', 'created_at' => $created,
             'storage' => ['storage_version' => 1, 'sources' => [$folder]]];
@@ -6310,6 +6322,133 @@ DNS-over-HTTPS with IP:
             . 'Конфигурация. Включи VPN. Правило FINAL направляет трафик в группу «Eternal · Авто».');
     }
 
+    private function eternalExitUser(array $xray): ?int
+    {
+        $e = $this->getPacConf()['eternal_exit'] ?? [];
+        if (empty($e['enabled']) || empty($e['owner_uuid']) || empty($e['uuid'])) return null;
+        $owner = false;
+        $index = null;
+        foreach ($xray['inbounds'][0]['settings']['clients'] ?? [] as $i => $u) {
+            if (!empty($u['off'])) continue;
+            if (($u['id'] ?? '') === $e['owner_uuid']) $owner = true;
+            if (($u['id'] ?? '') === $e['uuid'] && !empty($u['eternal_exit'])) $index = $i;
+        }
+        return $owner ? $index : null;
+    }
+
+    // Reapply on every core/routing rebuild. A disabled or incomplete setup must
+    // keep the dedicated account blocked, never falling through to freedom.
+    public function eternalExitRouting(array $xray): array
+    {
+        $tag = 'eternal-exit-warp';
+        $emails = [];
+        foreach ($xray['inbounds'][0]['settings']['clients'] ?? [] as $u) {
+            if (!empty($u['eternal_exit']) || ($u['email'] ?? '') === 'Eternal · WARP-выход') {
+                if (!empty($u['email'])) $emails[] = $u['email'];
+            }
+        }
+        $xray['outbounds'] = array_values(array_filter($xray['outbounds'] ?? [],
+            fn($v) => ($v['tag'] ?? '') !== $tag));
+        $xray['routing']['rules'] = array_values(array_filter($xray['routing']['rules'] ?? [],
+            fn($v) => ($v['outboundTag'] ?? '') !== $tag));
+        if (!$emails) return $xray;
+        $active = $this->eternalExitUser($xray) !== null;
+        $outbound = ['tag' => $tag, 'protocol' => 'blackhole'];
+        if ($active) {
+            $outbound = ['tag' => $tag, 'protocol' => 'socks', 'settings' => [
+                'servers' => [['address' => '10.10.0.20', 'port' => 1080]]]];
+        }
+        $xray['outbounds'][] = $outbound;
+        array_unshift($xray['routing']['rules'], ['type' => 'field', 'user' => array_values(array_unique($emails)),
+            'outboundTag' => $tag]);
+        return $xray;
+    }
+
+    public function eternalExitSources(bool $resolve = true): array
+    {
+        $p = $this->getPacConf();
+        $i = $this->eternalExitUser($this->getXray());
+        if ($i === null || empty($p['grpc_reality']['enabled']) || empty($p['eternal_direct_443'])) return [];
+        $backup = $this->funnelLink($i, false, null, true);
+        $domain = $this->getDomain();
+        if (!$backup || parse_url($backup, PHP_URL_PORT) !== 443
+            || !filter_var($this->ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)
+            || !filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
+            || filter_var($domain, FILTER_VALIDATE_IP)) return [];
+        parse_str(parse_url($backup, PHP_URL_QUERY), $query);
+        $query['sni'] = $query['host'] = $domain;
+        $direct = 'vless://' . $p['eternal_exit']['uuid'] . '@' . $this->ip . ':443?'
+            . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        $links = ['Прямой XHTTP' => $direct, 'Прямой gRPC' => $this->grpcRealityLink($i)];
+        if ($resolve) {
+            foreach ($this->funnelAddresses(parse_url($backup, PHP_URL_HOST)) as $n => $ip) {
+                $links['Резерв по IP ' . ($n + 1)] = $this->funnelLink($i, false, $ip, true);
+            }
+        }
+        $links['Резерв по имени'] = $backup;
+        return ['folder_id' => 'eternal-exit-' . substr(hash('sha256', $p['eternal_exit']['uuid']), 0, 16),
+            'links' => $links];
+    }
+
+    public function eternalExitMenu()
+    {
+        $text = 'WARP на выходе Eternal. Телефон подключается к Eternal, сайты видят адрес Cloudflare. '
+            . 'В новом наборе есть прямые входы и резерв. Если WARP недоступен, этот набор останавливает соединение. '
+            . 'Прежний «Eternal · Авто» остаётся отдельным вариантом. Выбери приложение.';
+        $buttons = [];
+        if ($this->eternalExitSources(false)) {
+            foreach (['lxbox' => 'LxBox · Android', 'exclave' => 'Exclave · Android', 'shadowrocket' => 'Shadowrocket · iOS'] as $key => $title) {
+                $buttons[] = [['text' => $title, 'callback_data' => '/eternalExit ' . $key]];
+            }
+        } else {
+            $text = 'WARP на выходе Eternal сейчас недоступен.';
+        }
+        $buttons[] = [['text' => $this->i18n('back'), 'callback_data' => '/menu hy']];
+        $this->update($this->input['chat'], $this->input['message_id'], $text, $buttons);
+    }
+
+    public function sendEternalExitFiles(string $client)
+    {
+        $source = $this->eternalExitSources();
+        $chat = $this->input['from'];
+        if (!$source || !in_array($client, ['lxbox', 'exclave', 'shadowrocket'], true)) {
+            $this->send($chat, 'WARP на выходе Eternal сейчас недоступен.');
+            return;
+        }
+        $group = 'Eternal · WARP-выход';
+        if ($client === 'lxbox') {
+            $profile = $this->eternalFolderProfile($source, 'Eternal — выход через WARP', $group);
+            $this->sendFile($chat, new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR
+                | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'Eternal-Exit-WARP-Android.json', 'application/json'),
+                'Сохрани файл. LxBox → ≡ → Резервное копирование → Импорт → Выбрать файл… → Объединить с текущими. '
+                . 'На главном экране нажми ▶ справа от «Eternal · WARP-выход». Авто-узел уже есть в новой папке. '
+                . 'Сайты видят адрес Cloudflare. Прежний «Eternal · Авто» сохранится.');
+            return;
+        }
+        $links = [];
+        foreach ($source['links'] as $tag => $uri) {
+            $name = 'Eternal WARP · ' . $tag;
+            $links[$name] = explode('#', $uri, 2)[0] . '#' . rawurlencode($name);
+        }
+        $file = new CURLStringFile(implode("\n", $links) . "\n", 'Eternal-Exit-WARP-Nodes.txt', 'text/plain');
+        if ($client === 'exclave') {
+            $this->sendFile($chat, $file, 'Exclave → Добавить профиль → Импорт из файла. Затем Добавить профиль '
+                . '→ Ручные настройки → Балансировщик. Имя «Eternal · WARP-выход», тип «Список». '
+                . 'Добавь только новые узлы «Eternal WARP ·». Стратегия leastPing, '
+                . 'URL https://1.1.1.1/cdn-cgi/trace, интервал 60 с. Сохрани и выбери балансировщик. '
+                . 'При проверке подключения ожидается warp=on.');
+            return;
+        }
+        $this->sendFile($chat, $file, 'Shadowrocket, шаг 1 из 2. Открой TXT, скопируй весь текст и импортируй '
+            . 'в Shadowrocket через «Вставить». Новые узлы называются «Eternal WARP · …».');
+        $policy = "[Proxy Group]\n$group = url-test," . implode(',', array_keys($links))
+            . ",interval=60,tolerance=30,timeout=8,url=https://1.1.1.1/cdn-cgi/trace\n\n[Rule]\nFINAL,$group\n";
+        $this->sendFile($chat, new CURLStringFile($policy, 'Eternal-Exit-WARP-Shadowrocket.conf', 'text/plain'),
+            'Shadowrocket, шаг 2 из 2. Сохрани .conf в «Файлы». Конфигурация → Импорт из облака → выбери файл '
+            . '→ Использовать конфигурацию. На главном экране Глобальная маршрутизация → Конфигурация. '
+            . 'Включи VPN. При проверке подключения ожидается warp=on.');
+    }
+
     public function hysteriaMenu()
     {
         $pac    = $this->getPacConf();
@@ -6331,6 +6470,9 @@ DNS-over-HTTPS with IP:
                     ['text' => 'Shadowrocket · iOS', 'callback_data' => '/eternalShadowrocket'],
                 ];
             }
+        }
+        if ($this->eternalExitSources(false)) {
+            $data[] = [['text' => 'WARP на выходе Eternal', 'callback_data' => '/eternalExitMenu']];
         }
         if (!empty($pac['eternal_funnel']['enabled'])) {
             $text[] = "Если адрес сервера недоступен, резервное подключение доступно в разделе VLESS, в меню пользователя.";
@@ -9454,7 +9596,7 @@ DNS-over-HTTPS with IP:
     }
 
     // Eternal's alternate HTTPS entry uses the existing XHTTP inbound and its users.
-    public function funnelLink($i, $legacy = false, $edge = null)
+    public function funnelLink($i, $legacy = false, $edge = null, $smooth = false)
     {
         $pac = $this->getPacConf();
         $f = $pac['eternal_funnel'] ?? [];
@@ -9483,10 +9625,16 @@ DNS-over-HTTPS with IP:
             // An explicit XMUX object replaces defaults, so retain the existing
             // pool/request limits while checking idle links sooner and rotating
             // reusable connections without closing their active streams.
-            $params['extra'] = json_encode(['xmux' => [
+            $xmux = [
                 'maxConnections' => 3, 'hMaxRequestTimes' => '600-900',
                 'hMaxReusableSecs' => '180-300', 'hKeepAlivePeriod' => 15,
-            ]], JSON_UNESCAPED_SLASHES);
+            ];
+            if ($smooth) {
+                $xmux['maxConnections'] = 0;
+                $xmux['maxConcurrency'] = '16-32';
+                $xmux['cMaxReuseTimes'] = 0;
+            }
+            $params['extra'] = json_encode(['xmux' => $xmux], JSON_UNESCAPED_SLASHES);
         }
         $query = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
         return "vless://{$user['id']}@{$server}:$port?$query#"

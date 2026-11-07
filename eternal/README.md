@@ -125,3 +125,10 @@ IP сохраняют TLS SNI и HTTP Host резерва на 443.
 
 Исходные форматы и настройка групп описаны в [документации Exclave](https://github.com/ExclaveNetwork/Exclave/wiki/Group)
 и [руководстве Shadowrocket](https://github.com/LOWERTOP/Shadowrocket/wiki#代理分组).
+
+## Отдельный выход через WARP
+
+Меню **Hysteria → WARP на выходе Eternal** выдаёт новый набор для LxBox,
+Exclave и Shadowrocket. В нём прямые и резервные входы используют серверный
+WARP, а XHTTP создаёт соединения по нагрузке. Старый набор не изменяется.
+Установка, режим отказа и обслуживание описаны в [egress-warp.md](egress-warp.md).
