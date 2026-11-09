@@ -3,6 +3,7 @@
 // Presentation only. Preferences are deliberately separate from VPN configuration.
 trait EternalBotUi
 {
+    protected bool $uiRendering = false;
     protected function uiPreferencesPath(): string { return '/config/bot-ui.json'; }
 
     public function uiMode(): string
@@ -121,7 +122,7 @@ trait EternalBotUi
                     [['text' => '🌐 Открыть проверку связи', 'url' => 'https://1.1.1.1/cdn-cgi/trace']],
                     [$b('📥 Получить настройки', '/ui devices')], [$b('⬅️ К помощи с подключением', '/ui help')], $home]];
             case 'protocols':
-                $rows = [[$b('👤 VLESS · пользователи и ссылки', '/xray')],
+                $rows = [[$b('🛡 VLESS · пользователи и настройки', '/xray')],
                     [$b('🔐 WireGuard / Amnezia · 1', '/changeWG 0')], [$b('🔐 WireGuard / Amnezia · 2', '/changeWG 1')],
                     [$b('🚀 Hysteria', '/menu hy'), $b('🌐 NaiveProxy', '/menu naive')],
                     [$b('🔐 OpenConnect', '/menu oc'), $b('🔐 Shadowsocks', '/menu ss')],
@@ -134,7 +135,7 @@ trait EternalBotUi
                 return ["<b>🗂 Другие клиенты и протоколы</b>\n\nЗдесь доступны прежние ссылки, QR-коды и настройки. Выбери протокол, который поддерживает твой клиент.\n\nДля LxBox, Exclave и Shadowrocket проще получить готовый набор через «Подключить устройство».", $rows];
             case 'admin':
                 return ["<b>⚙️ Управление сервером</b>\n\nТехнические разделы для пользователей, протоколов и маршрутизации. Изменения здесь могут повлиять на подключения.", [
-                    [$b('👤 Пользователи VLESS', '/xray')], [$b('🗂 Протоколы и другие клиенты', '/ui protocols admin')],
+                    [$b('🛡 VLESS · пользователи и настройки', '/xray')], [$b('🗂 Протоколы и другие клиенты', '/ui protocols admin')],
                     [$b('🌐 Маршрутизация', '/routes'), $b('🛡 DNS · AdGuard', '/menu adguard')],
                     [$b('🔗 Подписки и PAC', '/pacMenu 0')], [$b('⚙️ Настройки бота и сервера', '/menu config')],
                     [$b('↩️ Старый интерфейс · все функции', '/ui set classic')], $home]];
@@ -149,10 +150,14 @@ trait EternalBotUi
     public function uiShow(array $screen)
     {
         [$text, $buttons] = $screen;
-        if (!empty($this->input['callback_id'])) {
-            return $this->update($this->input['chat'], $this->input['message_id'], $text, $buttons);
-        }
-        return $this->send($this->input['chat'], $text, $this->input['message_id'] ?? 0, $buttons);
+        $previous = $this->uiRendering;
+        $this->uiRendering = true;
+        try {
+            if (!empty($this->input['callback_id'])) {
+                return $this->update($this->input['chat'], $this->input['message_id'], $text, $buttons);
+            }
+            return $this->send($this->input['chat'], $text, $this->input['message_id'] ?? 0, $buttons);
+        } finally { $this->uiRendering = $previous; }
     }
 
     public function uiAction(): bool

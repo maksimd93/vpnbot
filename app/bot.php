@@ -2,11 +2,17 @@
 
 require_once __DIR__ . '/eternal_ui.php';
 require_once __DIR__ . '/eternal_status.php';
+require_once __DIR__ . '/eternal_xray_ui.php';
+require_once __DIR__ . '/eternal_admin_ui.php';
+require_once __DIR__ . '/eternal_legacy_ui.php';
 
 class Bot
 {
     use EternalBotUi;
     use EternalBotStatus;
+    use EternalXrayUi;
+    use EternalAdminUi;
+    use EternalLegacyUi;
     public $input;
     public $adguard;
     public $update;
@@ -140,6 +146,8 @@ class Bot
 
     public function action()
     {
+        if ($this->uiAdminAction()) return;
+        if ($this->uiXrayAction()) return;
         if ($this->uiAction()) return;
         switch (true) {
             // смена айпи сервера
@@ -4937,6 +4945,11 @@ DNS-over-HTTPS with IP:
 
     public function menu($type = false, $arg = false, $return = false)
     {
+        if ($type === 'config' && $this->uiMode() === 'simple') {
+            $screen = $this->uiConfigScreen();
+            if ($return) return $screen;
+            return $this->uiShow($screen);
+        }
         if (!$type && $this->uiMode() === 'simple') {
             $screen = $this->uiScreen();
             if ($return) return $screen;
@@ -6789,9 +6802,10 @@ DNS-over-HTTPS with IP:
 
     public function resetXrUser($i)
     {
+        $this->restartXray($this->getXray());
         $c = $this->getXrayStats();
         unset($c['users'][$i]);
-        $this->restartXray($this->getXray());
+        $this->setXrayStats($c);
         $this->userXr($i);
     }
 
@@ -7095,6 +7109,7 @@ DNS-over-HTTPS with IP:
 
     public function xray($page = 0)
     {
+        if ($this->uiMode() === 'simple') return $this->uiShow($this->uiXrayScreen('main', (int) $page));
         $c      = $this->getXray();
         $p      = $this->getPacConf();
         $text[] = "Menu -> " . $this->i18n('xray');
@@ -10738,6 +10753,10 @@ DNS-over-HTTPS with IP:
 
     public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false)
     {
+        if (!$this->uiRendering && $this->uiMode() === 'simple') {
+            if (is_array($button)) [$text, $button] = $this->uiLegacyScreen($text, $button);
+            if ($reply !== false) $text = $this->uiLegacyPrompt($text);
+        }
         if ($button) {
             $extra = ['inline_keyboard' => $button];
         }
@@ -10839,6 +10858,9 @@ DNS-over-HTTPS with IP:
 
     public function update($chat, $message_id, $text, $button = false, $reply = false, $mode = 'HTML')
     {
+        if (!$this->uiRendering && $this->uiMode() === 'simple' && is_array($button)) {
+            [$text, $button] = $this->uiLegacyScreen($text, $button);
+        }
         if ($button) {
             $extra = ['inline_keyboard' => $button];
         }
