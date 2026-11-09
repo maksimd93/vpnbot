@@ -1,7 +1,10 @@
 <?php
 
+require_once __DIR__ . '/eternal_ui.php';
+
 class Bot
 {
+    use EternalBotUi;
     public $input;
     public $adguard;
     public $update;
@@ -135,6 +138,7 @@ class Bot
 
     public function action()
     {
+        if ($this->uiAction()) return;
         switch (true) {
             // смена айпи сервера
             case preg_match('~^/menu$~', $this->input['message'], $m):
@@ -4931,6 +4935,11 @@ DNS-over-HTTPS with IP:
 
     public function menu($type = false, $arg = false, $return = false)
     {
+        if (!$type && $this->uiMode() === 'simple') {
+            $screen = $this->uiScreen();
+            if ($return) return $screen;
+            return $this->uiShow($screen);
+        }
         $conf   = $this->getPacConf();
         $domain = $conf['domain'] ?: $this->ip;
         $hash   = $this->getHashBot();
@@ -5148,6 +5157,10 @@ DNS-over-HTTPS with IP:
                     'callback_data' => "/applyupdatebot",
                 ],
             ]);
+        }
+
+        if (!$type) {
+            array_unshift($data, [['text' => 'Новый интерфейс', 'callback_data' => '/ui set simple']]);
         }
 
         if ($return) {
