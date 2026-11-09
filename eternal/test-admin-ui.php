@@ -223,7 +223,7 @@ try {
             if ($method === 'send') $send->invokeArgs($legacy, [1, $credentialText, 0, $legacyButtons]);
             else $update->invokeArgs($legacy, [1, 8, $credentialText, $legacyButtons]);
             [, $data] = end($legacy->requests);
-            $expected = $mode === 'simple' ? $decorated : [$credentialText, $legacyButtons];
+            $expected = $mode === 'simple' ? $legacy->uiFlowScreen($credentialText, $legacyButtons) : [$credentialText, $legacyButtons];
             adminCheck($data['text'] === $expected[0]
                 && json_decode($data['reply_markup'], true)['inline_keyboard'] === $expected[1], 'Production ' . $method . ' preserves the chosen interface');
         }

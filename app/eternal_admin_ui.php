@@ -33,7 +33,7 @@ trait EternalAdminUi
         $labels = [
             '/domain' => '🌐 Указать домен сервера…', '/deldomain' => '🗑 Удалить привязку домена…',
             '/addNipdomain' => '🌐 Использовать домен nip.io…', '/setSSL letsencrypt' => '🔐 Получить / обновить сертификат…',
-            '/deletessl' => '🗑 Удалить TLS-сертификат…', '/selfssl' => '🔐 Создать самоподписанный сертификат…',
+            '/deletessl' => '🗑 Удалить TLS-сертификат…', '/selfssl' => '📥 Загрузить свой TLS-сертификат…',
             '/ports' => '🔌 Открытые порты и их назначение', '/logs' => '📋 Посмотреть журналы', '/ipMenu' => '🛡 Контроль и блокировки IP',
             '/export' => '📤 Скачать резервную копию', '/import' => '📥 Восстановить из файла…',
             '/backup' => '🗓 Изменить расписание копий…', '/autoupdate' => empty($p['autoupdate']) ? '▶️ Включить автообновление…' : '⏸ Выключить автообновление…',
@@ -116,10 +116,10 @@ trait EternalAdminUi
                 $title = 'Изменить внешний доступ к порту ' . $m[1];
                 $effect = 'Публикация порта этой службы переключится между открытым и закрытым состоянием. Изменение вступит в силу после перезапуска; закрытый порт перестанет принимать внешние подключения.';
                 $back = '/ports';
-            } elseif (preg_match('~^/(switchAmnezia|resetAmnezia) (\d+)$~D', $callback, $m)) {
+            } elseif (preg_match('~^/(switchAmnezia|resetAmnezia) (-?\d+)$~D', $callback, $m)) {
                 $title = $m[1] === 'switchAmnezia' ? 'Изменить протокол WireGuard / Amnezia' : 'Обновить ключи маскировки Amnezia';
                 $effect = 'Для выбранного WireGuard-сервера изменятся параметры протокола. Служба перезапустится. Старые профили могут перестать работать; устройствам потребуется получить новые конфигурации.';
-                $back = '/menu wg ' . $m[2];
+                $back = '/wgui protocol ' . ($this->getInstanceWG() === 'wg1' ? '1' : '0') . ' ' . $m[2];
             } elseif (preg_match('~^/deloc (\d+)$~D', $callback, $m)) {
                 $users = $this->getClientsOc();
                 if (!isset($users[(int) $m[1]])) return null;
@@ -131,13 +131,19 @@ trait EternalAdminUi
                 $title = 'Удалить администратора ' . $m[1];
                 $effect = 'Этот Telegram ID потеряет доступ к управлению ботом и выдаче конфигураций.';
                 $back = '/cfgui access';
-            } else return null;
+            } else {
+                $extra = $this->uiExtraReview($callback, $p, $x);
+                if (!$extra) return null;
+                extract($extra, EXTR_OVERWRITE);
+            }
         }
         $files = [];
         foreach (['/config/ocserv.conf', '/config/ocserv.passwd', '/config/AdGuardHome.yaml', '/docker/compose', __DIR__ . '/config.php'] as $path) {
             $files[$path] = is_file($path) ? hash_file('sha256', $path) : null;
         }
-        $fingerprint = hash('sha256', json_encode([$callback, $p, $x, $files], JSON_THROW_ON_ERROR));
+        $wg = $this->wg ?? null;
+        $clients = $wg !== null ? $this->readClients() : null;
+        $fingerprint = hash('sha256', json_encode([$callback, $p, $x, $files, $wg, $clients], JSON_THROW_ON_ERROR));
         return compact('title', 'effect', 'current', 'back', 'fingerprint');
     }
 
@@ -160,6 +166,7 @@ trait EternalAdminUi
                 $this->uiShow(['Изменение отменено. Настройки сохранены.', [[$this->uiAdminButton('⬅️ Вернуться к настройке', $pending['back'])], [$this->uiAdminButton('🏠 На главную', '/menu')]]]);
                 return true;
             }
+            if (isset($pending['wg'])) $this->wg = (int) $pending['wg'];
             $review = $this->uiActionReview($pending['callback']);
             if (!$review || !hash_equals($pending['fingerprint'], $review['fingerprint'])) {
                 $this->uiShow(['Настройка успела измениться. Проверь её текущее состояние перед применением.', [[$this->uiAdminButton('⬅️ Проверить настройку', $pending['back'])]]]);
@@ -169,8 +176,12 @@ trait EternalAdminUi
             return false; // Continue to the unchanged, original action handler exactly once.
         }
         if ($this->uiMode() !== 'simple') return false;
+        if (preg_match('~^/switchAwg3 (-?\d+) ([01])(?: ok)?$~D', $callback, $m)) {
+            $this->wg = (int) $m[2];
+            $callback = '/switchAwg3 ' . $m[1] . ' ' . $m[2] . ' ok';
+        }
         // Avoid loading network configs for ordinary navigation and message replies.
-        if (!preg_match('~^/(changeTransport|grpcReality|resetXrStats|resetXrUser|switchMonthlyStats|toggleHwidLimit|switchXr|delxr|restart|autoupdate|deldomain|deletessl|addNipdomain|selfFakeDomain|adguardreset|adgFillAllowedClients|v2ray|hidePort|deladmin|changeOcExpose|adguardChBr|switchAmnezia|resetAmnezia|deloc)(?: |$)~', $callback)) return false;
+        if (!preg_match('~^/(changeTransport|grpcReality|resetXrStats|resetXrUser|switchMonthlyStats|toggleHwidLimit|switchXr|delxr|restart|autoupdate|deldomain|deletessl|addNipdomain|selfFakeDomain|adguardreset|adgFillAllowedClients|v2ray|hidePort|deladmin|changeOcExpose|adguardChBr|switchAmnezia|resetAmnezia|switchAwg3|deloc|switchClient|delete|switchTorrent|switchExchange|generateSecret|offWarp|applyupdatebot|switchBanIp|cleanDeny|denyIp|whiteIp|allowIp|clearLog|delLog|cleanLog|cleanLogs|changeblocklist|changewarplist|deleteblocklist|deletewarplist|delTemplate)(?: |$)~', $callback)) return false;
         $review = $this->uiActionReview($callback);
         if (!$review) {
             $this->uiShow(['Эта настройка больше недоступна. Открой актуальное меню.', [[$this->uiAdminButton('🏠 На главную', '/menu')]]]);
@@ -178,7 +189,7 @@ trait EternalAdminUi
         }
         $token = bin2hex(random_bytes(12));
         $_SESSION['ui_review'] = [$token => ['callback' => $callback, 'fingerprint' => $review['fingerprint'],
-            'user' => (string) ($this->input['from'] ?? ''), 'time' => time(), 'back' => $review['back']]];
+            'user' => (string) ($this->input['from'] ?? ''), 'time' => time(), 'back' => $review['back'], 'wg'=>$this->wg ?? null]];
         $e = fn($value) => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         $text = '<b>⚠️ ' . $e($review['title']) . "?</b>\n\n";
         if ($review['current'] !== '') $text .= $e($review['current']) . "\n\n";

@@ -5,6 +5,11 @@ require_once __DIR__ . '/eternal_status.php';
 require_once __DIR__ . '/eternal_xray_ui.php';
 require_once __DIR__ . '/eternal_admin_ui.php';
 require_once __DIR__ . '/eternal_legacy_ui.php';
+require_once __DIR__ . '/eternal_profiles_ui.php';
+require_once __DIR__ . '/eternal_wg_ui.php';
+require_once __DIR__ . '/eternal_lists_ui.php';
+require_once __DIR__ . '/eternal_services_ui.php';
+require_once __DIR__ . '/eternal_flow_ui.php';
 
 class Bot
 {
@@ -13,6 +18,11 @@ class Bot
     use EternalXrayUi;
     use EternalAdminUi;
     use EternalLegacyUi;
+    use EternalProfilesUi;
+    use EternalWgUi;
+    use EternalListsUi;
+    use EternalServicesUi;
+    use EternalFlowUi;
     public $input;
     public $adguard;
     public $update;
@@ -146,7 +156,13 @@ class Bot
 
     public function action()
     {
+        if ($this->uiFlowPrepareAction()) return;
+        if ($this->uiWgPrepareAction()) return;
         if ($this->uiAdminAction()) return;
+        if ($this->uiWgAction()) return;
+        if ($this->uiProfilesAction()) return;
+        if ($this->uiListsAction()) return;
+        if ($this->uiServicesAction()) return;
         if ($this->uiXrayAction()) return;
         if ($this->uiAction()) return;
         switch (true) {
@@ -576,9 +592,12 @@ class Bot
                 break;
             case preg_match('~^/switchAwg3 (-?\d+) ([01])( ok)?$~', $this->input['callback'], $m):
                 // eternal: the instance travels in the callback, so an old menu message cannot switch the other one
-                $c = $this->getPacConf();
-                $c['wg_instance'] = (int) $m[2];
-                $this->setPacConf($c);
+                if ($this->uiMode() === 'simple') $this->wg = (int) $m[2];
+                else {
+                    $c = $this->getPacConf();
+                    $c['wg_instance'] = (int) $m[2];
+                    $this->setPacConf($c);
+                }
                 if (empty($m[3])) {
                     $this->confirmAwg3($m[1]);
                 } else {
@@ -2310,10 +2329,10 @@ class Bot
     {
         $c = $this->getPacConf();
         $this->ssh('iptables -F', $this->getInstanceWG());
-        if ($c['exchange']) {
+        if (!empty($c[$this->getInstanceWG(1) . 'exchange'])) {
             $this->ssh('bash /block_exchange.sh', $this->getInstanceWG());
         }
-        if ($c['blocktorrent']) {
+        if (!empty($c[$this->getInstanceWG(1) . 'blocktorrent'])) {
             $this->ssh('bash /block_torrent.sh', $this->getInstanceWG());
         }
     }
@@ -3483,7 +3502,7 @@ DNS-over-HTTPS with IP:
     public function getTitleWG()
     {
         $c = $this->getPacConf();
-        return $this->i18n($c[$this->getInstanceWG(1) . 'amnezia'] ? 'amnezia' : 'wg_title') . ' ' . $c['wg_instance'];
+        return $this->i18n($c[$this->getInstanceWG(1) . 'amnezia'] ? 'amnezia' : 'wg_title') . ' ' . ($this->getInstanceWG() === 'wg1' ? 1 : 0);
     }
 
     public function statusWg(int $page = 0)
@@ -4945,6 +4964,8 @@ DNS-over-HTTPS with IP:
 
     public function menu($type = false, $arg = false, $return = false)
     {
+        // pacMenu renders its own message; do not send a second empty update.
+        if ($type === 'pac' && $this->uiMode() === 'simple') return $this->pacMenu((int) $arg);
         if ($type === 'config' && $this->uiMode() === 'simple') {
             $screen = $this->uiConfigScreen();
             if ($return) return $screen;
@@ -10754,9 +10775,11 @@ DNS-over-HTTPS with IP:
     public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false)
     {
         if (!$this->uiRendering && $this->uiMode() === 'simple') {
-            if (is_array($button)) [$text, $button] = $this->uiLegacyScreen($text, $button);
-            if ($reply !== false) $text = $this->uiLegacyPrompt($text);
+            if (is_array($button)) [$text, $button] = $this->uiFlowScreen($text, $button);
+            elseif ($reply === false && is_string($text) && ($screen = $this->uiListsMessage($text)) !== null) [$text, $button] = $screen;
+            if ($reply !== false) { $text = $this->uiFlowPrompt($text); $reply = 'Ответь на сообщение выше'; }
         }
+        if ($this->uiMode() === 'simple' && is_array($button)) $button = $this->uiFitCallbacks($button);
         if ($button) {
             $extra = ['inline_keyboard' => $button];
         }
@@ -10799,6 +10822,10 @@ DNS-over-HTTPS with IP:
                 $data['reply_markup'] = json_encode($extra);
             }
             $r = $this->request('sendMessage', $data);
+        }
+        if ($reply !== false && $this->uiMode() === 'simple' && isset($this->wg) && !empty($r['result']['message_id'])) {
+            $_SESSION['ui_wg_prompts'][$r['result']['message_id']] = ['instance'=>(int) $this->wg, 'time'=>time()];
+            if (count($_SESSION['ui_wg_prompts']) > 64) $_SESSION['ui_wg_prompts'] = array_slice($_SESSION['ui_wg_prompts'], -64, null, true);
         }
         return $r;
     }
@@ -10858,9 +10885,12 @@ DNS-over-HTTPS with IP:
 
     public function update($chat, $message_id, $text, $button = false, $reply = false, $mode = 'HTML')
     {
-        if (!$this->uiRendering && $this->uiMode() === 'simple' && is_array($button)) {
-            [$text, $button] = $this->uiLegacyScreen($text, $button);
+        if (!$this->uiRendering && $this->uiMode() === 'simple') {
+            if (is_array($button)) [$text, $button] = $this->uiFlowScreen($text, $button);
+            elseif ($reply === false && is_string($text) && ($screen = $this->uiListsMessage($text)) !== null) [$text, $button] = $screen;
+            if ($reply !== false) { $text = $this->uiFlowPrompt($text); $reply = 'Ответь на сообщение выше'; }
         }
+        if ($this->uiMode() === 'simple' && is_array($button)) $button = $this->uiFitCallbacks($button);
         if ($button) {
             $extra = ['inline_keyboard' => $button];
         }
