@@ -9,6 +9,7 @@ class UiTestBot extends Direct443TestBot
     public array $xrayFixture;
     public array $menuCalls = [];
     public array $updates = [];
+    public int $statusCalls = 0;
 
     public function __construct(string $preferences, int $user = 71)
     {
@@ -29,6 +30,11 @@ class UiTestBot extends Direct443TestBot
     }
 
     protected function uiPreferencesPath(): string { return $this->preferences; }
+    public function uiStatusSummary(): string
+    {
+        ++$this->statusCalls;
+        return '<b>📊 Сервисы Eternal</b>' . "\n🟢 VLESS / Xray · ⚪ WARP-прокси";
+    }
     public function getXray() { return $this->xrayFixture; }
     public function menu($type = false, $arg = false, $return = false)
     {
@@ -95,16 +101,19 @@ try {
     $a = new UiTestBot($path, 71);
     $originalPac = $a->config;
     $originalXray = $a->xrayFixture;
-    $screens = array_map(fn($page) => [$page, 'lxbox', 'auto'],
+    $screens = array_map(fn($page) => [$page, 'lxbox', 'auto', 'admin'],
         ['home', 'devices', 'android', 'help', 'trouble', 'admin', 'protocols']);
+    foreach (['devices', 'android', 'admin'] as $origin) $screens[] = ['protocols', 'lxbox', 'auto', $origin];
     foreach (['lxbox', 'exclave', 'shadowrocket'] as $client) {
-        $screens[] = ['modes', $client, 'auto'];
-        $screens[] = ['guides', $client, 'auto'];
-        foreach (['auto', 'exit'] as $mode) $screens[] = ['guide', $client, $mode];
+        $screens[] = ['modes', $client, 'auto', 'admin'];
+        $screens[] = ['guides', $client, 'auto', 'help'];
+        foreach (['auto', 'exit'] as $mode) {
+            foreach (['setup', 'help'] as $origin) $screens[] = ['guide', $client, $mode, $origin];
+        }
     }
-    foreach ($screens as [$page, $client, $mode]) {
-        [$text, $rows] = $a->uiScreen($page, $client, $mode);
-        $screenName = "$page/$client/$mode";
+    foreach ($screens as [$page, $client, $mode, $origin]) {
+        [$text, $rows] = $a->uiScreen($page, $client, $mode, $origin);
+        $screenName = "$page/$client/$mode/$origin";
         uiCheck(is_string($text) && trim($text) !== ''
             && mb_strlen(html_entity_decode(strip_tags($text), ENT_QUOTES, 'UTF-8')) <= 4096, 'Telegram text limit: ' . $screenName);
         uiCheck(is_array($rows) && count($rows) > 0, 'Screen has navigation: ' . $screenName);
@@ -136,7 +145,7 @@ try {
         $modeButtons = array_column(array_merge(...end($a->updates)[3]), 'text', 'callback_data');
         foreach (['auto' => 'Eternal · Авто', 'exit' => 'Eternal · WARP-выход'] as $mode => $label) {
             $guideCallback = "/ui guide $client $mode";
-            uiCheck(($modeButtons[$guideCallback] ?? null) === $label, 'Imported mode has its own guide button');
+            uiCheck(($modeButtons[$guideCallback] ?? null) === '📘 ' . $label, 'Imported mode has its own guide button');
             $a->input['callback'] = $guideCallback;
             $a->action();
             [, , $text, $rows] = end($a->updates);
@@ -144,12 +153,38 @@ try {
             $callbacks = uiCallbacks($rows);
             uiCheck(in_array("/ui file $client $mode", $callbacks, true)
                 && in_array($chooseMode, $callbacks, true), 'Guide preserves mode on download and offers mode selection');
+            uiCheck($rows[count($rows) - 2][0]['callback_data'] === $chooseMode
+                && $rows[count($rows) - 1][0]['callback_data'] === '/menu', 'Help guide has one-step back and home');
         }
     }
     uiCheck($a->documents === [] && $a->uiMode() === 'simple', 'Reading instructions emits no files or preference changes');
 
+    foreach (['lxbox', 'exclave', 'shadowrocket'] as $client) {
+        $a->input['callback'] = '/ui modes ' . $client;
+        $a->action();
+        [, , $text, $rows] = end($a->updates);
+        $expectedBack = $client === 'shadowrocket' ? '/ui devices' : '/ui android';
+        uiCheck($rows[count($rows) - 2][0]['callback_data'] === $expectedBack, 'Modes return to correct device/application step');
+        uiCheck(str_contains($text, $client === 'shadowrocket' ? 'Шаг 2' : 'Шаг 3'), 'Connection step accounts for iOS single app');
+    }
+    foreach (['devices', 'android', 'admin'] as $origin) {
+        [, $parentRows] = $a->uiScreen($origin);
+        uiCheck(in_array('/ui protocols ' . $origin, uiCallbacks($parentRows), true), 'Protocol entry carries its origin');
+        $a->input['callback'] = '/ui protocols ' . $origin;
+        $a->action();
+        $rows = end($a->updates)[3];
+        uiCheck($rows[count($rows) - 2][0]['callback_data'] === '/ui ' . $origin, 'Protocol menu returns to its origin');
+    }
+    $a->input['callback'] = '/ui protocols';
+    $a->action();
+    $rows = end($a->updates)[3];
+    uiCheck($rows[count($rows) - 2][0]['callback_data'] === '/ui admin', 'Legacy protocol callback still returns to admin');
+
     $integration = new UiMenuIntegrationTestBot($path, 71);
     $home = $integration->uiScreen();
+    uiCheck(count($home[1]) === 5 && uiCallbacks($home[1]) === [
+        '/ui devices', '/ui help', '/ui admin', '/ui refresh', '/ui set classic'], 'Home exposes primary actions, refresh and rollback');
+    uiCheck(str_contains($home[0], '📊 Сервисы Eternal'), 'Home includes service status summary');
     uiCheck($integration->menu(false, false, true) === $home, 'Production menu return contract renders simple home');
     $integration->input['callback_id'] = '';
     foreach (['/start', '/menu'] as $command) {
@@ -163,6 +198,11 @@ try {
     $integration->input['callback_id'] = 'fixture-callback';
     $integration->action();
     uiCheck(end($integration->updates) === [-100, 8, $home[0], $home[1]], 'Legacy back callback renders simple home');
+    $statusCalls = $integration->statusCalls;
+    $integration->input['callback'] = '/ui refresh';
+    $integration->action();
+    uiCheck($integration->statusCalls === $statusCalls + 1
+        && end($integration->updates) === [-100, 8, $home[0], $home[1]], 'Refresh obtains statuses and redraws home');
 
     foreach (['classic', 'simple', 'simple', 'classic', 'classic', 'simple'] as $mode) {
         $a->input['callback'] = '/ui set ' . $mode;
@@ -201,6 +241,9 @@ try {
                 uiCheck($chat === 71 && $chat !== $a->input['chat'], 'Credentials are delivered privately');
                 uiCheck(mb_strlen($caption) <= 1024 && strlen($file->data) > 0, 'File content and caption');
             }
+            $rows = end($a->updates)[3];
+            uiCheck($rows[count($rows) - 2][0]['callback_data'] === '/ui modes ' . $client
+                && $rows[count($rows) - 1][0]['callback_data'] === '/menu', 'Setup guide returns to mode selection and home');
         }
     }
     foreach (['/ui file unknown auto', '/ui file lxbox unknown', '/ui file shadowrocket exit extra', '/ui set unknown'] as $callback) {

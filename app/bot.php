@@ -1,10 +1,12 @@
 <?php
 
 require_once __DIR__ . '/eternal_ui.php';
+require_once __DIR__ . '/eternal_status.php';
 
 class Bot
 {
     use EternalBotUi;
+    use EternalBotStatus;
     public $input;
     public $adguard;
     public $update;
@@ -5160,7 +5162,7 @@ DNS-over-HTTPS with IP:
         }
 
         if (!$type) {
-            array_unshift($data, [['text' => 'Новый интерфейс', 'callback_data' => '/ui set simple']]);
+            array_unshift($data, [['text' => '✨ Новый интерфейс', 'callback_data' => '/ui set simple']]);
         }
 
         if ($return) {
