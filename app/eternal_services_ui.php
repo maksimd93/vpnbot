@@ -159,6 +159,7 @@ trait EternalServicesUi
             elseif (isset($button['web_app']) && $section === 'update') $button['text'] = '📋 История изменений';
             $rows[] = [$button];
         }
+        if ($section === 'hysteria') $rows[] = [$b('📱 Все приложения и инструкции', '/ui devices')];
         $rows[] = $back;
         $rows[] = $home;
         if (mb_strlen(html_entity_decode(strip_tags($text), ENT_QUOTES, 'UTF-8')) > 4096) $text = $originalText;

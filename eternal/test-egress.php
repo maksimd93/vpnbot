@@ -79,7 +79,8 @@ foreach ([2, 1, 0] as $count) {
 }
 $b->input['callback'] = '/eternalExitMenu';
 $b->action();
-egCheck(count($b->rendered[1]) === 4 && $b->rendered[1][3][0]['callback_data'] === '/menu hy', 'Menu and back navigation');
+egCheck(count($b->rendered[1]) === ($b->uiMode() === 'simple' ? count($b->uiClients()) + 1 : 4)
+    && end($b->rendered[1])[0]['callback_data'] === '/menu hy', 'Menu and back navigation');
 foreach (['disabled', 'missing-config', 'owner-disabled', 'client-disabled', 'owner-missing'] as $case) {
     $b = new EgressTestBot();
     if ($case === 'disabled') $b->config['eternal_exit']['enabled'] = false;

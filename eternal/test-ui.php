@@ -9,6 +9,7 @@ class UiTestBot extends Direct443TestBot
     public array $xrayFixture;
     public array $menuCalls = [];
     public array $updates = [];
+    public array $sentMessages = [];
     public int $statusCalls = 0;
 
     public function __construct(string $preferences, int $user = 71)
@@ -46,6 +47,11 @@ class UiTestBot extends Direct443TestBot
     {
         $this->updates[] = [$chat, $message_id, $text, $button];
     }
+    public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false)
+    {
+        $this->sentMessages[] = [$chat, $text, $to, $button];
+        return parent::send($chat, $text, $to, $button, $reply, $mode, $disable_notification);
+    }
     public function answer($callback_id, $textNotify = false, $notify = false) { return true; }
     public function setPacConf(array $conf) { throw new RuntimeException('UI attempted to change VPN configuration'); }
     public function restartXray($config, $norestart = false) { throw new RuntimeException('UI attempted to restart Xray'); }
@@ -61,6 +67,22 @@ class UiMenuIntegrationTestBot extends UiTestBot
     {
         // Invoke the production method while retaining the no-network test fixture.
         return (new ReflectionMethod(Bot::class, 'menu'))->invokeArgs($this, [$type, $arg, $return]);
+    }
+}
+
+class UiDeliveryTestBot extends UiTestBot
+{
+    public int $failDocument = 0;
+    public bool $failGuide = false;
+    public function sendFile($chat, $file, $caption = false, $to = false)
+    {
+        parent::sendFile($chat, $file, $caption, $to);
+        return ['ok' => count($this->documents) !== $this->failDocument];
+    }
+    public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false)
+    {
+        parent::send($chat, $text, $to, $button, $reply, $mode, $disable_notification);
+        return ['ok' => !$this->failGuide];
     }
 }
 
@@ -102,9 +124,9 @@ try {
     $originalPac = $a->config;
     $originalXray = $a->xrayFixture;
     $screens = array_map(fn($page) => [$page, 'lxbox', 'auto', 'admin'],
-        ['home', 'devices', 'android', 'help', 'trouble', 'admin', 'protocols']);
-    foreach (['devices', 'android', 'admin'] as $origin) $screens[] = ['protocols', 'lxbox', 'auto', $origin];
-    foreach (['lxbox', 'exclave', 'shadowrocket'] as $client) {
+        ['home', 'devices', 'android', 'ios', 'windows', 'help', 'trouble', 'admin', 'protocols']);
+    foreach (['devices', 'android', 'ios', 'windows', 'admin'] as $origin) $screens[] = ['protocols', 'lxbox', 'auto', $origin];
+    foreach (array_keys($a->uiClients()) as $client) {
         $screens[] = ['modes', $client, 'auto', 'admin'];
         $screens[] = ['guides', $client, 'auto', 'help'];
         foreach (['auto', 'exit'] as $mode) {
@@ -137,7 +159,7 @@ try {
     $a->input['callback'] = '/ui help';
     $a->action();
     $helpCallbacks = uiCallbacks(end($a->updates)[3]);
-    foreach (['lxbox', 'exclave', 'shadowrocket'] as $client) {
+    foreach (array_keys($a->uiClients()) as $client) {
         $chooseMode = '/ui guides ' . $client;
         uiCheck(in_array($chooseMode, $helpCallbacks, true), 'Help asks which imported bundle: ' . $client);
         $a->input['callback'] = $chooseMode;
@@ -159,15 +181,15 @@ try {
     }
     uiCheck($a->documents === [] && $a->uiMode() === 'simple', 'Reading instructions emits no files or preference changes');
 
-    foreach (['lxbox', 'exclave', 'shadowrocket'] as $client) {
+    foreach (array_keys($a->uiClients()) as $client) {
         $a->input['callback'] = '/ui modes ' . $client;
         $a->action();
         [, , $text, $rows] = end($a->updates);
-        $expectedBack = $client === 'shadowrocket' ? '/ui devices' : '/ui android';
+        $expectedBack = '/ui ' . (in_array($client, ['shadowrocket','karing_ios'], true) ? 'ios' : ($client === 'v2rayn' ? 'windows' : 'android'));
         uiCheck($rows[count($rows) - 2][0]['callback_data'] === $expectedBack, 'Modes return to correct device/application step');
-        uiCheck(str_contains($text, $client === 'shadowrocket' ? 'Шаг 2' : 'Шаг 3'), 'Connection step accounts for iOS single app');
+        uiCheck(str_contains($text, 'Шаг 3'), 'Connection step follows device and application choice');
     }
-    foreach (['devices', 'android', 'admin'] as $origin) {
+    foreach (['devices', 'android', 'ios', 'windows', 'admin'] as $origin) {
         [, $parentRows] = $a->uiScreen($origin);
         uiCheck(in_array('/ui protocols ' . $origin, uiCallbacks($parentRows), true), 'Protocol entry carries its origin');
         $a->input['callback'] = '/ui protocols ' . $origin;
@@ -225,8 +247,9 @@ try {
     $a->uiSetMode('simple');
 
     foreach (['auto', 'exit'] as $mode) {
-        foreach (['lxbox', 'exclave', 'shadowrocket'] as $client) {
+        foreach (array_keys($a->uiClients()) as $client) {
             $a->documents = [];
+            $a->sentMessages = [];
             $a->input['callback'] = '/ui file ' . $client . ' ' . $mode;
             $a->action();
             $expected = $mode === 'auto'
@@ -235,17 +258,61 @@ try {
             if ($client === 'shadowrocket') {
                 $expected[] = $mode === 'auto' ? 'Eternal-Auto-Shadowrocket.conf' : 'Eternal-Exit-WARP-Shadowrocket.conf';
             }
+            if (in_array($client, ['v2rayn','karing_android','karing_ios'], true)) {
+                $suffix = $client === 'v2rayn' ? 'v2rayN' : 'Karing';
+                $expected = [($mode === 'auto' ? 'Eternal-Auto-' : 'Eternal-Exit-WARP-') . $suffix . '.txt'];
+            }
             uiCheck(array_map(fn($d) => $d[1]->postname, $a->documents) === $expected,
                 'Existing generator and filenames: ' . $client . '/' . $mode);
             foreach ($a->documents as [$chat, $file, $caption]) {
                 uiCheck($chat === 71 && $chat !== $a->input['chat'], 'Credentials are delivered privately');
                 uiCheck(mb_strlen($caption) <= 1024 && strlen($file->data) > 0, 'File content and caption');
             }
+            uiCheck(count($a->sentMessages) === 1, 'Exactly one standalone instruction accompanies the files');
+            [$guideChat, $guideText, $guideReplyTo, $guideButtons] = $a->sentMessages[0];
+            uiCheck($guideChat === 71 && $guideReplyTo === 0 && $guideButtons === false,
+                'Forwardable instructions are private, standalone and have no bot-dependent controls');
+            uiCheck($guideText === $a->uiClientGuide($client, $mode) && mb_strlen($guideText) <= 3000,
+                'Detailed instruction fits one sendMessage without splitting');
+            foreach ($expected as $filename) uiCheck(str_contains($guideText, $filename), 'Guide identifies every file: ' . $filename);
+            uiCheck(str_contains($guideText, 'https://') && str_contains($guideText, 'https://1.1.1.1/cdn-cgi/trace'), 'Guide includes installation and connection check');
+            uiCheck(str_contains($guideText, $mode === 'exit' ? 'warp=on' : 'ip=192.0.2.50'), 'Guide verifies the selected egress');
             $rows = end($a->updates)[3];
             uiCheck($rows[count($rows) - 2][0]['callback_data'] === '/ui modes ' . $client
                 && $rows[count($rows) - 1][0]['callback_data'] === '/menu', 'Setup guide returns to mode selection and home');
         }
     }
+    $a->documents = []; $a->sentMessages = [];
+    $a->input['callback'] = '/ui forward karing_ios exit'; $a->action();
+    uiCheck($a->documents === [] && count($a->sentMessages) === 1
+        && $a->sentMessages[0][1] === $a->uiClientGuide('karing_ios', 'exit'), 'Forward instruction does not regenerate credentials');
+    foreach (['/eternalAutoFile','/eternalExclave','/eternalShadowrocket','/eternalExit lxbox',
+        '/eternalExit exclave','/eternalExit shadowrocket','/eternalExit v2rayn','/eternalExit karing_android','/eternalExit karing_ios'] as $callback) {
+        $a->documents = []; $a->sentMessages = [];
+        $a->input['callback'] = $callback; $a->action();
+        uiCheck(count($a->documents) > 0 && count($a->sentMessages) === 1, 'Technical menu delivers complete private kit: ' . $callback);
+    }
+    $a->uiSetMode('classic');
+    foreach (['/ui file v2rayn auto','/ui forward karing_ios exit','/eternalExit v2rayn','/eternalExit karing_android','/eternalExit karing_ios'] as $callback) {
+        $a->documents = []; $a->sentMessages = [];
+        $a->input['callback'] = $callback; $a->action();
+        uiCheck(!$a->documents && !$a->sentMessages && end($a->menuCalls)['mode'] === 'classic', 'Stale client buttons respect classic: ' . $callback);
+    }
+    $a->uiSetMode('simple');
+    foreach (array_keys($a->uiClients()) as $client) foreach (['auto','exit'] as $mode) {
+        $failed = new UiDeliveryTestBot($path,71); $failed->failDocument = 1;
+        $failed->input['callback'] = "/ui file $client $mode"; $failed->action();
+        uiCheck(count($failed->documents) === 1 && !$failed->sentMessages
+            && str_contains(end($failed->updates)[2], 'не полностью'), 'Document failure does not claim successful kit delivery');
+    }
+    $failed = new UiDeliveryTestBot($path,71); $failed->failDocument = 2;
+    $failed->input['callback'] = '/ui file shadowrocket exit'; $failed->action();
+    uiCheck(count($failed->documents) === 2 && !$failed->sentMessages
+        && str_contains(end($failed->updates)[2], 'не полностью'), 'Partial two-file delivery is reported');
+    $failed = new UiDeliveryTestBot($path,71); $failed->failGuide = true;
+    $failed->input['callback'] = '/ui file karing_ios auto'; $failed->action();
+    uiCheck(count($failed->documents) === 1 && count($failed->sentMessages) === 1
+        && str_contains(end($failed->updates)[2], 'не полностью'), 'Instruction failure is reported even after file success');
     foreach (['/ui file unknown auto', '/ui file lxbox unknown', '/ui file shadowrocket exit extra', '/ui set unknown'] as $callback) {
         $a->documents = [];
         $a->input['callback'] = $callback;
@@ -256,13 +323,14 @@ try {
     uiCheck((new UiTestBot($path, 72))->uiMode() === 'classic', 'Other user retains classic after all flows');
     $unavailable = new UiTestBot($path, 71);
     $unavailable->xrayFixture['inbounds'][0]['settings']['clients'][0]['off'] = true;
-    foreach (['auto', 'exit'] as $mode) {
+    foreach (['auto', 'exit'] as $mode) foreach (array_keys($a->uiClients()) as $client) {
         $unavailable->documents = [];
-        $unavailable->input['callback'] = '/ui file lxbox ' . $mode;
+        $unavailable->sentMessages = [];
+        $unavailable->input['callback'] = "/ui file $client $mode";
         $unavailable->uiAction();
-        uiCheck($unavailable->documents === [], 'Disabled owner cannot receive a stale export: ' . $mode);
+        uiCheck($unavailable->documents === [] && !$unavailable->sentMessages, 'Disabled owner cannot receive a stale export or success guide: ' . $mode);
     }
-    echo "PASS UI preference persistence, rollback, user isolation, menu limits, six private exports and no VPN mutations\n";
+    echo "PASS UI preference persistence, rollback, platform navigation, twelve private exports, standalone guides and no VPN mutations\n";
 } finally {
     if (is_file($path)) unlink($path);
     rmdir($directory);

@@ -10,6 +10,8 @@ require_once __DIR__ . '/eternal_wg_ui.php';
 require_once __DIR__ . '/eternal_lists_ui.php';
 require_once __DIR__ . '/eternal_services_ui.php';
 require_once __DIR__ . '/eternal_flow_ui.php';
+require_once __DIR__ . '/eternal_guides_ui.php';
+require_once __DIR__ . '/eternal_client_exports.php';
 
 class Bot
 {
@@ -23,6 +25,8 @@ class Bot
     use EternalListsUi;
     use EternalServicesUi;
     use EternalFlowUi;
+    use EternalGuidesUi;
+    use EternalClientExports;
     public $input;
     public $adguard;
     public $update;
@@ -6328,15 +6332,16 @@ DNS-over-HTTPS with IP:
         $profile = $this->eternalAutoProfile();
         if (!$profile) {
             $this->menu('hy');
-            return;
+            return false;
         }
         $file = new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
             | JSON_UNESCAPED_SLASHES), 'Eternal-Auto-Android.json', 'application/json');
-        $this->sendFile($this->input['from'], $file, 'Весь трафик этой группы выходит через Eternal. '
+        $result = $this->sendFile($this->input['from'], $file, 'Весь трафик этой группы выходит через Eternal. '
             . 'Hysteria и gRPC подключаются напрямую, резерв использует публичный вход Tailscale. Сохрани файл. '
             . 'LxBox → ≡ → Резервное копирование → Импорт → Выбрать файл… → Объединить с текущими. '
             . 'В новой папке «Подключения Eternal» уже есть авто-узел. После импорта на главном экране '
             . 'нажми ▶ справа от «Eternal · Авто». Если он уже добавлен вручную, повторный импорт не нужен.');
+        return !empty($result['ok']);
     }
 
     public function sendEternalClientFiles(bool $shadowrocket)
@@ -6345,7 +6350,7 @@ DNS-over-HTTPS with IP:
         $chat = $this->input['from'];
         if (!$source) {
             $this->send($chat, 'Набор подключений Eternal сейчас недоступен.');
-            return;
+            return false;
         }
         $links = [];
         foreach ($source['links'] as $tag => $uri) {
@@ -6354,21 +6359,23 @@ DNS-over-HTTPS with IP:
         }
         $file = new CURLStringFile(implode("\n", $links) . "\n", 'Eternal-Nodes.txt', 'text/plain');
         if (!$shadowrocket) {
-            $this->sendFile($chat, $file, 'Exclave → Добавить профиль → Импорт из файла → Eternal-Nodes.txt. '
+            $result = $this->sendFile($chat, $file, 'Exclave → Добавить профиль → Импорт из файла → Eternal-Nodes.txt. '
                 . 'Затем Добавить профиль → Ручные настройки → Балансировщик. Имя «Eternal · Авто», тип «Список», '
                 . 'добавь только узлы из файла. Стратегия leastPing, URL проверки https://1.1.1.1/cdn-cgi/trace, '
                 . 'интервал 60 с. Сохрани, выбери балансировщик и включи VPN.');
-            return;
+            return !empty($result['ok']);
         }
-        $this->sendFile($chat, $file, 'Shadowrocket, шаг 1 из 2. Открой Eternal-Nodes.txt, скопируй весь текст. '
+        $result = $this->sendFile($chat, $file, 'Shadowrocket, шаг 1 из 2. Открой Eternal-Nodes.txt, скопируй весь текст. '
             . 'Открой Shadowrocket и подтверди добавление узлов. Если приглашения нет, нажми «Вставить» '
             . 'под «Проверкой соединения» на главном экране. Имена узлов начинаются с «Eternal ·».');
+        if (empty($result['ok'])) return false;
         $policy = "[Proxy Group]\nEternal · Авто = url-test," . implode(',', array_keys($links))
             . ",interval=60,tolerance=30,timeout=8,url=https://1.1.1.1/cdn-cgi/trace\n\n[Rule]\nFINAL,Eternal · Авто\n";
-        $this->sendFile($chat, new CURLStringFile($policy, 'Eternal-Auto-Shadowrocket.conf', 'text/plain'),
+        $result = $this->sendFile($chat, new CURLStringFile($policy, 'Eternal-Auto-Shadowrocket.conf', 'text/plain'),
             'Шаг 2 из 2. Сохрани .conf в «Файлы». Shadowrocket → Конфигурация → Импорт из облака → '
             . 'Eternal-Auto-Shadowrocket.conf → Использовать конфигурацию. На главной открой «Глобальная маршрутизация» → '
             . 'Конфигурация. Включи VPN. Правило FINAL направляет трафик в группу «Eternal · Авто».');
+        return !empty($result['ok']);
     }
 
     private function eternalExitUser(array $xray): ?int
@@ -6446,7 +6453,9 @@ DNS-over-HTTPS with IP:
             . 'Прежний «Eternal · Авто» остаётся отдельным вариантом. Выбери приложение.';
         $buttons = [];
         if ($this->eternalExitSources(false)) {
-            foreach (['lxbox' => 'LxBox · Android', 'exclave' => 'Exclave · Android', 'shadowrocket' => 'Shadowrocket · iOS'] as $key => $title) {
+            $clients = $this->uiMode() === 'simple' ? $this->uiClients()
+                : ['lxbox' => 'LxBox · Android', 'exclave' => 'Exclave · Android', 'shadowrocket' => 'Shadowrocket · iOS'];
+            foreach ($clients as $key => $title) {
                 $buttons[] = [['text' => $title, 'callback_data' => '/eternalExit ' . $key]];
             }
         } else {
@@ -6462,17 +6471,17 @@ DNS-over-HTTPS with IP:
         $chat = $this->input['from'];
         if (!$source || !in_array($client, ['lxbox', 'exclave', 'shadowrocket'], true)) {
             $this->send($chat, 'WARP на выходе Eternal сейчас недоступен.');
-            return;
+            return false;
         }
         $group = 'Eternal · WARP-выход';
         if ($client === 'lxbox') {
             $profile = $this->eternalFolderProfile($source, 'Eternal — выход через WARP', $group);
-            $this->sendFile($chat, new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR
+            $result = $this->sendFile($chat, new CURLStringFile(json_encode($profile, JSON_THROW_ON_ERROR
                 | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'Eternal-Exit-WARP-Android.json', 'application/json'),
                 'Сохрани файл. LxBox → ≡ → Резервное копирование → Импорт → Выбрать файл… → Объединить с текущими. '
                 . 'На главном экране нажми ▶ справа от «Eternal · WARP-выход». Авто-узел уже есть в новой папке. '
                 . 'Сайты видят адрес Cloudflare. Прежний «Eternal · Авто» сохранится.');
-            return;
+            return !empty($result['ok']);
         }
         $links = [];
         foreach ($source['links'] as $tag => $uri) {
@@ -6481,21 +6490,23 @@ DNS-over-HTTPS with IP:
         }
         $file = new CURLStringFile(implode("\n", $links) . "\n", 'Eternal-Exit-WARP-Nodes.txt', 'text/plain');
         if ($client === 'exclave') {
-            $this->sendFile($chat, $file, 'Exclave → Добавить профиль → Импорт из файла. Затем Добавить профиль '
+            $result = $this->sendFile($chat, $file, 'Exclave → Добавить профиль → Импорт из файла. Затем Добавить профиль '
                 . '→ Ручные настройки → Балансировщик. Имя «Eternal · WARP-выход», тип «Список». '
                 . 'Добавь только новые узлы «Eternal WARP ·». Стратегия leastPing, '
                 . 'URL https://1.1.1.1/cdn-cgi/trace, интервал 60 с. Сохрани и выбери балансировщик. '
                 . 'При проверке подключения ожидается warp=on.');
-            return;
+            return !empty($result['ok']);
         }
-        $this->sendFile($chat, $file, 'Shadowrocket, шаг 1 из 2. Открой TXT, скопируй весь текст и импортируй '
+        $result = $this->sendFile($chat, $file, 'Shadowrocket, шаг 1 из 2. Открой TXT, скопируй весь текст и импортируй '
             . 'в Shadowrocket через «Вставить». Новые узлы называются «Eternal WARP · …».');
+        if (empty($result['ok'])) return false;
         $policy = "[Proxy Group]\n$group = url-test," . implode(',', array_keys($links))
             . ",interval=60,tolerance=30,timeout=8,url=https://1.1.1.1/cdn-cgi/trace\n\n[Rule]\nFINAL,$group\n";
-        $this->sendFile($chat, new CURLStringFile($policy, 'Eternal-Exit-WARP-Shadowrocket.conf', 'text/plain'),
+        $result = $this->sendFile($chat, new CURLStringFile($policy, 'Eternal-Exit-WARP-Shadowrocket.conf', 'text/plain'),
             'Shadowrocket, шаг 2 из 2. Сохрани .conf в «Файлы». Конфигурация → Импорт из облака → выбери файл '
             . '→ Использовать конфигурацию. На главном экране Глобальная маршрутизация → Конфигурация. '
             . 'Включи VPN. При проверке подключения ожидается warp=on.');
+        return !empty($result['ok']);
     }
 
     public function hysteriaMenu()

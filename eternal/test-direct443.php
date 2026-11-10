@@ -24,9 +24,11 @@ class Direct443TestBot extends Bot
     public function funnelAddresses(string $host): array { return $this->edges; }
     public function sendFile($chat, $file, $caption = false, $to = false) {
         $this->documents[] = [$chat, $file, $caption];
+        return ['ok'=>true];
     }
     public function send($chat, $text, ?int $to = 0, $button = false, $reply = false, $mode = 'HTML', $disable_notification = false) {
         $this->reply = [$chat, $text];
+        return ['ok'=>true, 'result'=>['message_id'=>20]];
     }
 }
 function checkDirect443($result) { if (!$result) throw new RuntimeException('Direct 443 profile mismatch'); }
