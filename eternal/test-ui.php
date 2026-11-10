@@ -125,9 +125,10 @@ try {
     $originalXray = $a->xrayFixture;
     $screens = array_map(fn($page) => [$page, 'lxbox', 'auto', 'admin'],
         ['home', 'devices', 'android', 'ios', 'windows', 'help', 'trouble', 'admin', 'protocols']);
-    foreach (['devices', 'android', 'ios', 'windows', 'admin'] as $origin) $screens[] = ['protocols', 'lxbox', 'auto', $origin];
+    foreach (['home', 'devices', 'android', 'ios', 'windows', 'admin'] as $origin) $screens[] = ['protocols', 'lxbox', 'auto', $origin];
     foreach (array_keys($a->uiClients()) as $client) {
         $screens[] = ['modes', $client, 'auto', 'admin'];
+        $screens[] = ['protocols', $client, 'auto', $client];
         $screens[] = ['guides', $client, 'auto', 'help'];
         foreach (['auto', 'exit'] as $mode) {
             foreach (['setup', 'help'] as $origin) $screens[] = ['guide', $client, $mode, $origin];
@@ -181,13 +182,28 @@ try {
     }
     uiCheck($a->documents === [] && $a->uiMode() === 'simple', 'Reading instructions emits no files or preference changes');
 
+    $protocolCallbacks = ['/xray', '/changeWG 0', '/changeWG 1', '/menu hy', '/menu naive', '/menu oc', '/menu ss', '/mtproto'];
     foreach (array_keys($a->uiClients()) as $client) {
         $a->input['callback'] = '/ui modes ' . $client;
         $a->action();
         [, , $text, $rows] = end($a->updates);
+        $modeScreen = [$text, $rows];
         $expectedBack = '/ui ' . (in_array($client, ['shadowrocket','karing_ios'], true) ? 'ios' : ($client === 'v2rayn' ? 'windows' : 'android'));
         uiCheck($rows[count($rows) - 2][0]['callback_data'] === $expectedBack, 'Modes return to correct device/application step');
         uiCheck(str_contains($text, 'Шаг 3'), 'Connection step follows device and application choice');
+        $catalogCallback = '/ui protocols ' . $client;
+        uiCheck(in_array($catalogCallback, uiCallbacks($rows), true), 'Each client exposes all protocols: ' . $client);
+        $a->input['callback'] = $catalogCallback;
+        $a->action();
+        [, , $text, $rows] = end($a->updates);
+        uiCheck(array_diff($protocolCallbacks, uiCallbacks($rows)) === [], 'Client catalogue retains every protocol: ' . $client);
+        uiCheck(str_contains($text, $a->uiClients()[$client]), 'Catalogue identifies the selected application: ' . $client);
+        $backCallback = $rows[count($rows) - 2][0]['callback_data'];
+        uiCheck($backCallback === '/ui modes ' . $client && end($rows)[0]['callback_data'] === '/menu',
+            'Client catalogue returns to the same connection choices and exposes home: ' . $client);
+        $a->input['callback'] = $backCallback;
+        $a->action();
+        uiCheck(array_slice(end($a->updates), 2) === $modeScreen, 'Catalogue back button restores the selected client: ' . $client);
     }
     foreach (['devices', 'android', 'ios', 'windows', 'admin'] as $origin) {
         [, $parentRows] = $a->uiScreen($origin);
@@ -201,11 +217,24 @@ try {
     $a->action();
     $rows = end($a->updates)[3];
     uiCheck($rows[count($rows) - 2][0]['callback_data'] === '/ui admin', 'Legacy protocol callback still returns to admin');
+    $a->input['callback'] = '/ui protocols home';
+    $a->action();
+    $rows = end($a->updates)[3];
+    uiCheck(uiCallbacks($rows) === [...$protocolCallbacks, '/menu'], 'Home catalogue includes every protocol and one home link without a redundant back button');
+    uiCheck($a->documents === [] && $a->sentMessages === [], 'Browsing all protocol catalogues does not send files or standalone messages');
+    $withDnstt = new UiTestBot($path, 71);
+    $withDnstt->config['showdnstt'] = true;
+    $withDnstt->input['callback'] = '/ui protocols lxbox';
+    $withDnstt->action();
+    uiCheck(in_array('/dnstt', uiCallbacks(end($withDnstt->updates)[3]), true), 'DNSTT appears when its visibility is enabled');
+    $withDnstt->config['showdnstt'] = false;
+    $withDnstt->action();
+    uiCheck(!in_array('/dnstt', uiCallbacks(end($withDnstt->updates)[3]), true), 'DNSTT stays hidden when its visibility is disabled');
 
     $integration = new UiMenuIntegrationTestBot($path, 71);
     $home = $integration->uiScreen();
-    uiCheck(count($home[1]) === 5 && uiCallbacks($home[1]) === [
-        '/ui devices', '/ui help', '/ui admin', '/ui refresh', '/ui set classic'], 'Home exposes primary actions, refresh and rollback');
+    uiCheck(count($home[1]) === 6 && uiCallbacks($home[1]) === [
+        '/ui devices', '/ui protocols home', '/ui help', '/ui admin', '/ui refresh', '/ui set classic'], 'Home exposes primary actions, all protocols, refresh and rollback');
     uiCheck(str_contains($home[0], '📊 Сервисы Eternal'), 'Home includes service status summary');
     uiCheck($integration->menu(false, false, true) === $home, 'Production menu return contract renders simple home');
     $integration->input['callback_id'] = '';
@@ -293,7 +322,8 @@ try {
         uiCheck(count($a->documents) > 0 && count($a->sentMessages) === 1, 'Technical menu delivers complete private kit: ' . $callback);
     }
     $a->uiSetMode('classic');
-    foreach (['/ui file v2rayn auto','/ui forward karing_ios exit','/eternalExit v2rayn','/eternalExit karing_android','/eternalExit karing_ios'] as $callback) {
+    foreach (['/ui file v2rayn auto','/ui forward karing_ios exit','/ui protocols home','/ui protocols lxbox',
+        '/ui protocols karing_ios','/eternalExit v2rayn','/eternalExit karing_android','/eternalExit karing_ios'] as $callback) {
         $a->documents = []; $a->sentMessages = [];
         $a->input['callback'] = $callback; $a->action();
         uiCheck(!$a->documents && !$a->sentMessages && end($a->menuCalls)['mode'] === 'classic', 'Stale client buttons respect classic: ' . $callback);
@@ -323,6 +353,18 @@ try {
     uiCheck((new UiTestBot($path, 72))->uiMode() === 'classic', 'Other user retains classic after all flows');
     $unavailable = new UiTestBot($path, 71);
     $unavailable->xrayFixture['inbounds'][0]['settings']['clients'][0]['off'] = true;
+    foreach (array_keys($a->uiClients()) as $client) {
+        $unavailable->input['callback'] = '/ui modes ' . $client;
+        $unavailable->action();
+        $callbacks = uiCallbacks(end($unavailable->updates)[3]);
+        uiCheck(in_array('/ui protocols ' . $client, $callbacks, true)
+            && !in_array("/ui file $client auto", $callbacks, true)
+            && !in_array("/ui file $client exit", $callbacks, true), 'All protocols remain available when ready-made bundles are unavailable: ' . $client);
+        $unavailable->input['callback'] = '/ui protocols ' . $client;
+        $unavailable->action();
+        uiCheck(array_diff($protocolCallbacks, uiCallbacks(end($unavailable->updates)[3])) === [],
+            'Unavailable bundles do not hide separate protocol menus: ' . $client);
+    }
     foreach (['auto', 'exit'] as $mode) foreach (array_keys($a->uiClients()) as $client) {
         $unavailable->documents = [];
         $unavailable->sentMessages = [];

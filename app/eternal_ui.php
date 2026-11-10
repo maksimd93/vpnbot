@@ -87,31 +87,34 @@ trait EternalBotUi
                     [$b('📱 Android', '/ui android')],
                     [$b('🍎 iPhone / iPad', '/ui ios')],
                     [$b('💻 Windows', '/ui windows')],
-                    [$b('🗂 Другой компьютер или роутер', '/ui protocols devices')], $home]];
+                    [$b('🗂 Все протоколы · другие устройства', '/ui protocols devices')], $home]];
             case 'android':
                 return ["<b>📱 Подключение · Android</b>\nШаг 2 · Приложение\n\nКакое приложение используешь?", [
                     [$b('📦 LxBox', '/ui modes lxbox')], [$b('📦 Exclave', '/ui modes exclave')],
                     [$b('📦 Karing', '/ui modes karing_android')],
-                    [$b('🗂 Другое приложение', '/ui protocols android')], [$b('⬅️ К выбору устройства', '/ui devices')], $home]];
+                    [$b('🗂 Все протоколы · другие приложения', '/ui protocols android')], [$b('⬅️ К выбору устройства', '/ui devices')], $home]];
             case 'ios':
                 return ["<b>🍎 Подключение · iPhone / iPad</b>\nШаг 2 · Приложение\n\nВыбери клиент. Ссылка на установку будет в инструкции.", [
                     [$b('🚀 Shadowrocket', '/ui modes shadowrocket')], [$b('📦 Karing', '/ui modes karing_ios')],
-                    [$b('🗂 Другое приложение', '/ui protocols ios')], [$b('⬅️ К выбору устройства', '/ui devices')], $home]];
+                    [$b('🗂 Все протоколы · другие приложения', '/ui protocols ios')], [$b('⬅️ К выбору устройства', '/ui devices')], $home]];
             case 'windows':
                 return ["<b>💻 Подключение · Windows</b>\nШаг 2 · Приложение\n\nДля v2rayN получишь список узлов и пошаговую инструкцию: установка, импорт, включение прокси или TUN.", [
-                    [$b('📦 v2rayN', '/ui modes v2rayn')], [$b('🗂 Другое приложение', '/ui protocols windows')],
+                    [$b('📦 v2rayN', '/ui modes v2rayn')], [$b('🗂 Все протоколы · другие приложения', '/ui protocols windows')],
                     [$b('⬅️ К выбору устройства', '/ui devices')], $home]];
             case 'modes':
                 $step = 3;
-                $text = '<b>🔀 ' . $apps[$client] . "</b>\nШаг $step · Режим подключения\n\n"
-                    . "<b>Eternal · Авто</b>\nСайты видят адрес Eternal. В наборе есть прямые подключения и резерв.\n\n"
+                $text = '<b>🔀 ' . $apps[$client] . "</b>\nШаг $step · Способ подключения\n\n"
+                    . "<b>Готовые наборы</b> объединяют несколько подключений к Eternal.\n\n"
+                    . "<b>Eternal · Авто</b>\nСайты видят адрес Eternal. В наборе — Hysteria, VLESS и резервные входы.\n\n"
                     . "<b>Eternal · WARP-выход</b>\nСайты видят адрес Cloudflare. WARP работает на сервере, отдельное приложение на телефоне не нужно.\n\n"
-                    . 'Кнопка выдаёт файлы и отдельную инструкцию для пересылки. Подключение включается в приложении на устройстве.';
+                    . "Кнопки наборов выдают файлы и отдельную инструкцию для пересылки. Подключение включается в приложении на устройстве.\n\n"
+                    . '<b>Все протоколы</b> — отдельные ссылки, QR-коды и настройки VLESS, WireGuard / AmneziaWG, Hysteria, NaiveProxy и других служб.';
                 if ($client === 'v2rayn') $text .= "\n\nv2rayN импортирует отдельные узлы. «Авто» — название набора Eternal; автоматический выбор узла этим TXT не создаётся.";
                 $rows = [];
                 if ($this->eternalAutoSources(false)) $rows[] = [$b('📥 Получить Eternal · Авто', "/ui file $client auto")];
                 if ($this->eternalExitSources(false)) $rows[] = [$b('📥 Получить WARP-выход', "/ui file $client exit")];
-                if (!$rows) $text .= "\n\nВыдача готовых наборов сейчас недоступна. Другие подключения есть в управлении сервером.";
+                if (!$rows) $text .= "\n\nВыдача готовых наборов сейчас недоступна. Открой «Все протоколы» ниже, чтобы выбрать отдельное подключение.";
+                $rows[] = [$b('🗂 Все протоколы · ссылки и QR', "/ui protocols $client")];
                 $rows[] = [$b('⬅️ К выбору приложения', '/ui ' . $this->uiClientParent($client))];
                 $rows[] = $home;
                 return [$text, $rows];
@@ -156,8 +159,8 @@ trait EternalBotUi
                     [['text' => '🌐 Открыть проверку связи', 'url' => 'https://1.1.1.1/cdn-cgi/trace']],
                     [$b('📥 Получить настройки', '/ui devices')], [$b('⬅️ К помощи с подключением', '/ui help')], $home]];
             case 'protocols':
-                $rows = [[$b('🛡 VLESS · пользователи и настройки', '/xray')],
-                    [$b('🔐 WireGuard / Amnezia · 1', '/changeWG 0')], [$b('🔐 WireGuard / Amnezia · 2', '/changeWG 1')],
+                $rows = [[$b('🛡 VLESS · профили и ссылки', '/xray')],
+                    [$b('🔐 WireGuard / AmneziaWG · 1', '/changeWG 0')], [$b('🔐 WireGuard / AmneziaWG · 2', '/changeWG 1')],
                     [$b('🚀 Hysteria', '/menu hy'), $b('🌐 NaiveProxy', '/menu naive')],
                     [$b('🔐 OpenConnect', '/menu oc'), $b('🔐 Shadowsocks', '/menu ss')],
                     [$b('✈️ Прокси для Telegram', '/mtproto')]];
@@ -167,8 +170,18 @@ trait EternalBotUi
                     'ios' => ['⬅️ К выбору приложения', '/ui ios'],
                     'windows' => ['⬅️ К выбору приложения', '/ui windows'],
                     'admin' => ['⬅️ К управлению сервером', '/ui admin']];
-                $rows[] = [$b(...($parents[$origin] ?? $parents['admin']))]; $rows[] = $home;
-                return ["<b>🗂 Другие клиенты и протоколы</b>\n\nЗдесь доступны прежние ссылки, QR-коды и настройки. Выбери протокол, который поддерживает твой клиент.\n\nДля LxBox, Exclave, Shadowrocket, v2rayN и Karing получи комплект через «Подключить устройство».", $rows];
+                if (isset($apps[$origin])) $rows[] = [$b('⬅️ К вариантам подключения', "/ui modes $origin")];
+                elseif ($origin !== 'home') $rows[] = [$b(...($parents[$origin] ?? $parents['admin']))];
+                $rows[] = $home;
+                $text = "<b>🗂 Все протоколы</b>\n\nВыбери отдельный способ подключения. В разделе протокола доступны его профили, ссылки, QR-коды или данные для ручного ввода.\n\n"
+                    . "• <b>VLESS</b> — «Пользователи и ссылки» → пользователь → «Подключение, QR и резерв».\n"
+                    . "• <b>WireGuard / AmneziaWG</b> — выбери устройство, затем файл или QR-код.\n"
+                    . "• <b>Hysteria, NaiveProxy, Shadowsocks</b> — данные для импорта в совместимый клиент.\n"
+                    . "• <b>OpenConnect</b> — «Данные подключения» и учётная запись из раздела «Пользователи».\n"
+                    . "• <b>Telegram-прокси</b> — подключение внутри Telegram.\n\n";
+                if (isset($apps[$origin])) $text .= '<b>Выбранное приложение: ' . $apps[$origin] . ".</b> Оно может поддерживать не все протоколы этого списка.\n\n";
+                $text .= '«Eternal · Авто» и «WARP-выход» — готовые наборы. Они доступны через «Подключить устройство». Настройки сервера внутри разделов влияют на действующие подключения.';
+                return [$text, $rows];
             case 'admin':
                 return ["<b>⚙️ Управление сервером</b>\n\nТехнические разделы для пользователей, протоколов и маршрутизации. Изменения здесь могут повлиять на подключения.", [
                     [$b('🛡 VLESS · пользователи и настройки', '/xray')], [$b('🗂 Протоколы и другие клиенты', '/ui protocols admin')],
@@ -177,7 +190,8 @@ trait EternalBotUi
                     [$b('↩️ Старый интерфейс · все функции', '/ui set classic')], $home]];
             default:
                 return ["<b>🛡 Eternal VPN</b>\n\n" . $this->uiStatusSummary() . "\n\nВыбери действие ниже ↓", [
-                    [$b('📱 Подключить устройство', '/ui devices')], [$b('📘 Помощь с подключением', '/ui help')],
+                    [$b('📱 Подключить устройство', '/ui devices')], [$b('🗂 Все протоколы', '/ui protocols home')],
+                    [$b('📘 Помощь с подключением', '/ui help')],
                     [$b('⚙️ Управление сервером', '/ui admin')], [$b('🔄 Обновить статусы', '/ui refresh')],
                     [$b('↩️ Старый интерфейс', '/ui set classic')]]];
         }
@@ -228,7 +242,7 @@ trait EternalBotUi
         if ($this->uiMode() === 'classic') { $this->menu(); return true; }
         if (preg_match('~^/ui (home|refresh|devices|android|ios|windows|help|trouble|admin|protocols)$~D', $callback, $m)) {
             $this->uiShow($this->uiScreen($m[1]));
-        } elseif (preg_match('~^/ui protocols (devices|android|ios|windows|admin)$~D', $callback, $m)) {
+        } elseif (preg_match('~^/ui protocols (devices|android|ios|windows|admin|home|lxbox|exclave|shadowrocket|v2rayn|karing_android|karing_ios)$~D', $callback, $m)) {
             $this->uiShow($this->uiScreen('protocols', 'lxbox', 'auto', $m[1]));
         } elseif (preg_match('~^/ui (modes|guides) (lxbox|exclave|shadowrocket|v2rayn|karing_android|karing_ios)$~D', $callback, $m)) {
             $this->uiShow($this->uiScreen($m[1], $m[2]));
